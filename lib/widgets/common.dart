@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 
 // ───────────────────────── Colors ─────────────────────────
 
-const kBrand = Color(0xFF6C5CE7);
-const kBrandLight = Color(0xFFA29BFE);
-const kAccent = Color(0xFF00D2A0);
+const kBrand = Color(0xFFC4F135); // lime
+const kBrandLight = Color(0xFF7EDB6B);
+const kAccent = Color(0xFF8BE04B);
+const kLavender = Color(0xFFA29BFE);
+const kBg = Color(0xFF0C0E0C);
+const kCard = Color(0xFF1A1C1A);
 const kWarm = Color(0xFFFF9F43);
 const kPink = Color(0xFFFF6B81);
 const kBlue = Color(0xFF4DA8FF);
@@ -48,7 +51,7 @@ class Surface extends StatelessWidget {
       width: double.infinity,
       padding: padding,
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1C1C26) : Colors.white,
+        color: isDark ? kCard : Colors.white,
         borderRadius: BorderRadius.circular(20),
         boxShadow: isDark
             ? null
@@ -153,7 +156,7 @@ class EmptyState extends StatelessWidget {
             onPressed: busy ? null : onPressed,
             style: FilledButton.styleFrom(backgroundColor: kBrand),
             icon: busy
-                ? const Spinner(color: Colors.white)
+                ? const Spinner(color: Colors.black)
                 : const Icon(Icons.auto_awesome, size: 18),
             label: Text(busy ? 'Generating...' : buttonLabel),
           ),
@@ -222,7 +225,9 @@ class DaySelector extends StatelessWidget {
                 margin: const EdgeInsets.symmetric(horizontal: 3),
                 padding: const EdgeInsets.symmetric(vertical: 10),
                 decoration: BoxDecoration(
-                  color: wd == selected ? kBrand : onSurface.withOpacity(0.06),
+                  color: wd == selected
+                      ? Colors.white
+                      : onSurface.withOpacity(0.06),
                   borderRadius: BorderRadius.circular(14),
                   border: wd == today && wd != selected
                       ? Border.all(color: kBrand, width: 1.5)
@@ -235,7 +240,7 @@ class DaySelector extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w700,
-                        color: wd == selected ? Colors.white : null,
+                        color: wd == selected ? Colors.black : null,
                       ),
                     ),
                     const SizedBox(height: 6),
@@ -245,7 +250,7 @@ class DaySelector extends StatelessWidget {
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         color: hasContent(wd)
-                            ? (wd == selected ? Colors.white : kAccent)
+                            ? (wd == selected ? Colors.black : kAccent)
                             : Colors.transparent,
                       ),
                     ),
@@ -275,7 +280,7 @@ class Avatar extends StatelessWidget {
       child: Text(
         name.isNotEmpty ? name[0].toUpperCase() : 'A',
         style: TextStyle(
-          color: Colors.white,
+          color: Colors.black,
           fontWeight: FontWeight.w700,
           fontSize: radius * 0.8,
         ),

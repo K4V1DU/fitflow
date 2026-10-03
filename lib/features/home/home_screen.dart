@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../entities/app_user.dart';
 import '../../entities/meal_plan.dart';
@@ -357,163 +358,232 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
     }
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final u = _view;
 
-    return Scaffold(
-      backgroundColor: isDark
-          ? const Color(0xFF111118)
-          : const Color(0xFFF5F6FA),
-      body: IndexedStack(
-        index: _navIndex,
-        children: [
-          _homeTab(u),
-          WorkoutsScreen(
-            plan: _user.workoutPlan,
-            busy: _busyWorkout,
-            completedToday: _workoutDoneToday,
-            onGenerate: _generateWorkout,
-            onComplete: _completeWorkout,
-          ),
-          FeedScreen(uid: _user.uid, authorName: _user.name),
-          NutritionScreen(
-            user: u,
-            busy: _busyMeal,
-            eaten: _eaten,
-            keyOf: _mealKey,
-            onGenerate: _generateMeals,
-            onToggle: _toggleMeal,
-          ),
-          ProfileScreen(
-            user: _user,
-            onSave: _saveProfile,
-            onLogout: _auth.logout,
-          ),
-        ],
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light.copyWith(
+        statusBarColor: Colors.transparent,
+        systemNavigationBarColor: kBg,
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _navIndex,
-        onDestinationSelected: (i) => setState(() => _navIndex = i),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home_rounded),
-            label: 'Home',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.fitness_center_outlined),
-            selectedIcon: Icon(Icons.fitness_center),
-            label: 'Workouts',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.dynamic_feed_outlined),
-            selectedIcon: Icon(Icons.dynamic_feed),
-            label: 'Feed',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.restaurant_outlined),
-            selectedIcon: Icon(Icons.restaurant),
-            label: 'Nutrition',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
-            label: 'Profile',
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _homeTab(AppUser u) {
-    return SafeArea(
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-        children: [
-          _Header(greeting: _greeting, name: u.name, onLogout: _auth.logout),
-          const SizedBox(height: 20),
-          _CalorieCard(user: u),
-          const SizedBox(height: 16),
-          _AiCoachCard(
-            tip: _coachTip(u),
-            busyWorkout: _busyWorkout,
-            busyMeal: _busyMeal,
-            onGenerateWorkout: _generateWorkout,
-            onGenerateMeals: _generateMeals,
-          ),
-          const SizedBox(height: 24),
-          SectionTitle(
-            'Today\'s workout',
-            actionLabel: u.workoutPlan != null ? 'Regenerate' : null,
-            onAction: _busyWorkout ? null : _generateWorkout,
-          ),
-          const SizedBox(height: 12),
-          _WorkoutSection(
-            plan: u.workoutPlan,
-            day: u.workoutPlan?.today,
-            busy: _busyWorkout,
-            onGenerate: _generateWorkout,
-            // Jump to the Workouts tab where it can be completed.
-            onStart: () => setState(() => _navIndex = 1),
-          ),
-          const SizedBox(height: 24),
-          Row(
+      child: Theme(
+        data: _appTheme(),
+        child: Scaffold(
+          body: IndexedStack(
+            index: _navIndex,
             children: [
-              Expanded(
-                child: _StatTile(
-                  icon: Icons.directions_walk_rounded,
-                  color: kAccent,
-                  value: fmt(u.today.steps),
-                  label: 'Steps',
-                  onTap: _logSteps,
-                ),
+              _homeTab(u),
+              WorkoutsScreen(
+                plan: _user.workoutPlan,
+                busy: _busyWorkout,
+                completedToday: _workoutDoneToday,
+                onGenerate: _generateWorkout,
+                onComplete: _completeWorkout,
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _StatTile(
-                  icon: Icons.water_drop_rounded,
-                  color: kBlue,
-                  value: '${u.today.waterLitres.toStringAsFixed(2)} L',
-                  label: 'Water',
-                  onAdd: _addWater,
-                ),
+              FeedScreen(uid: _user.uid, authorName: _user.name),
+              NutritionScreen(
+                user: u,
+                busy: _busyMeal,
+                eaten: _eaten,
+                keyOf: _mealKey,
+                onGenerate: _generateMeals,
+                onToggle: _toggleMeal,
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _StatTile(
-                  icon: Icons.bedtime_rounded,
-                  color: kBrandLight,
-                  value: u.today.sleepLabel,
-                  label: 'Sleep',
-                  onTap: _logSleep,
-                ),
+              ProfileScreen(
+                user: _user,
+                onSave: _saveProfile,
+                onLogout: _auth.logout,
               ),
             ],
           ),
-          const SizedBox(height: 24),
-          const SectionTitle('Weekly activity'),
-          const SizedBox(height: 12),
-          _WeeklyChart(days: u.last7Days),
-          const SizedBox(height: 24),
-          SectionTitle(
-            'Today\'s meals',
-            actionLabel: u.mealPlan != null ? 'Regenerate' : null,
-            onAction: _busyMeal ? null : _generateMeals,
+          bottomNavigationBar: _NavBar(
+            index: _navIndex,
+            onChanged: (i) => setState(() => _navIndex = i),
           ),
-          const SizedBox(height: 12),
-          _MealSection(
-            plan: u.mealPlan,
-            day: u.mealPlan?.today,
-            busy: _busyMeal,
-            eaten: _eaten,
-            keyOf: _mealKey,
-            onGenerate: _generateMeals,
-            onToggle: _toggleMeal,
-          ),
-        ],
+        ),
       ),
     );
   }
+
+  /// Dates (yyyy-MM-dd) on which a workout was logged.
+  Set<String> get _workoutDays => {
+    for (final a in _user.activities)
+      if (a.id.startsWith('workout-')) a.id.substring('workout-'.length),
+  };
+
+  Widget _homeTab(AppUser u) {
+    final plan = u.workoutPlan;
+    final planned = plan == null
+        ? 0
+        : plan.days.where((d) => !d.isRestDay).length;
+
+    final now = DateTime.now();
+    final monday = DateTime(now.year, now.month, now.day - (now.weekday - 1));
+    final doneDays = _workoutDays;
+    final done = [
+      for (var i = 0; i < 7; i++)
+        DailyStats.keyFor(DateTime(monday.year, monday.month, monday.day + i)),
+    ].where((k) => doneDays.contains(k)).length;
+
+    return Stack(
+      children: [
+        // Soft green glow behind the header, like the reference.
+        const Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 340,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xFF1E4D1B), kBg],
+              ),
+            ),
+          ),
+        ),
+        SafeArea(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+            children: [
+              _Header(
+                greeting: _greeting,
+                name: u.name,
+                weeklyMinutes: u.weeklyActiveMinutes,
+                onAvatarTap: () => setState(() => _navIndex = 4),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  const Expanded(child: SectionTitle('Weekly Goal')),
+                  if (planned > 0)
+                    Text(
+                      '$done/$planned',
+                      style: const TextStyle(
+                        color: kBrand,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _WeekStrip(doneDays: doneDays),
+              const SizedBox(height: 16),
+              _TipCard(tip: _coachTip(u)),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  const Expanded(child: SectionTitle('Today\'s workout')),
+                  if (plan != null)
+                    _PillButton(
+                      label: _busyWorkout ? 'Generating...' : 'Regenerate',
+                      icon: Icons.auto_awesome,
+                      busy: _busyWorkout,
+                      onTap: _busyWorkout ? null : _generateWorkout,
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _WorkoutCard(
+                plan: plan,
+                day: plan?.today,
+                busy: _busyWorkout,
+                completed: _workoutDoneToday,
+                onGenerate: _generateWorkout,
+                // Jump to the Workouts tab where it can be completed.
+                onStart: () => setState(() => _navIndex = 1),
+              ),
+              const SizedBox(height: 24),
+              const SectionTitle('Nutrition today'),
+              const SizedBox(height: 12),
+              _CalorieCard(user: u),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: _StatTile(
+                      icon: Icons.directions_walk_rounded,
+                      color: kBrand,
+                      value: fmt(u.today.steps),
+                      label: 'Steps',
+                      onTap: _logSteps,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _StatTile(
+                      icon: Icons.water_drop_rounded,
+                      color: kBlue,
+                      value: '${u.today.waterLitres.toStringAsFixed(2)} L',
+                      label: 'Water',
+                      onAdd: _addWater,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _StatTile(
+                      icon: Icons.bedtime_rounded,
+                      color: kLavender,
+                      value: u.today.sleepLabel,
+                      label: 'Sleep',
+                      onTap: _logSleep,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+              const SectionTitle('Weekly activity'),
+              const SizedBox(height: 12),
+              _WeeklyChart(days: u.last7Days),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  const Expanded(child: SectionTitle('Today\'s meals')),
+                  if (u.mealPlan != null)
+                    _PillButton(
+                      label: _busyMeal ? 'Generating...' : 'Regenerate',
+                      icon: Icons.auto_awesome,
+                      busy: _busyMeal,
+                      onTap: _busyMeal ? null : _generateMeals,
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _MealSection(
+                plan: u.mealPlan,
+                day: u.mealPlan?.today,
+                busy: _busyMeal,
+                eaten: _eaten,
+                keyOf: _mealKey,
+                onGenerate: _generateMeals,
+                onToggle: _toggleMeal,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Dark + lime theme applied to every tab inside the home screen.
+ThemeData _appTheme() {
+  final base = ThemeData(brightness: Brightness.dark, useMaterial3: true);
+  return base.copyWith(
+    scaffoldBackgroundColor: kBg,
+    colorScheme: base.colorScheme.copyWith(
+      primary: kBrand,
+      onPrimary: Colors.black,
+      secondary: kBrand,
+      onSecondary: Colors.black,
+      surface: kCard,
+      onSurface: Colors.white,
+      surfaceContainer: kCard,
+      surfaceContainerHigh: kCard,
+      surfaceContainerHighest: const Color(0xFF262A26),
+    ),
+    bottomSheetTheme: const BottomSheetThemeData(backgroundColor: kCard),
+  );
 }
 
 /// Sample numbers so the dashboard looks alive during development.
@@ -551,67 +621,77 @@ class _Header extends StatelessWidget {
   const _Header({
     required this.greeting,
     required this.name,
-    required this.onLogout,
+    required this.weeklyMinutes,
+    required this.onAvatarTap,
   });
 
   final String greeting;
   final String name;
-  final VoidCallback onLogout;
+  final int weeklyMinutes;
+  final VoidCallback onAvatarTap;
 
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     return Row(
       children: [
+        GestureDetector(
+          onTap: onAvatarTap,
+          child: Container(
+            padding: const EdgeInsets.all(2),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: kBrand, width: 2),
+            ),
+            child: Avatar(name, radius: 20),
+          ),
+        ),
+        const SizedBox(width: 12),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                greeting,
-                style: textTheme.bodyMedium?.copyWith(
-                  color: textTheme.bodyMedium?.color?.withOpacity(0.6),
-                ),
+                '$greeting!',
+                style: textTheme.bodySmall?.copyWith(color: Colors.white70),
               ),
-              const SizedBox(height: 2),
               Text(
                 name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: textTheme.headlineSmall?.copyWith(
+                style: textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.w800,
                 ),
               ),
             ],
           ),
         ),
-        PopupMenuButton<String>(
-          tooltip: 'Account',
-          onSelected: (v) {
-            if (v == 'logout') onLogout();
-          },
-          itemBuilder: (_) => const [
-            PopupMenuItem(
-              value: 'logout',
-              child: Row(
-                children: [
-                  Icon(Icons.logout, size: 18),
-                  SizedBox(width: 10),
-                  Text('Log out'),
-                ],
-              ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFFFFA43C), Color(0xFFE8751A)],
             ),
-          ],
-          child: CircleAvatar(
-            radius: 22,
-            backgroundColor: kBrand,
-            child: Text(
-              name.isNotEmpty ? name[0].toUpperCase() : 'A',
-              style: const TextStyle(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.local_fire_department_rounded,
+                size: 16,
                 color: Colors.white,
-                fontWeight: FontWeight.w700,
               ),
-            ),
+              const SizedBox(width: 4),
+              Text(
+                '$weeklyMinutes min',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -619,82 +699,108 @@ class _Header extends StatelessWidget {
   }
 }
 
-// ───────────────────────── Calories ─────────────────────────
+// ───────────────────────── Week strip ─────────────────────────
 
-class _CalorieCard extends StatelessWidget {
-  const _CalorieCard({required this.user});
+class _WeekStrip extends StatelessWidget {
+  const _WeekStrip({required this.doneDays});
 
-  final AppUser user;
+  /// Date keys (yyyy-MM-dd) with a logged workout.
+  final Set<String> doneDays;
 
   @override
   Widget build(BuildContext context) {
-    final t = user.today;
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [kBrand, Color(0xFF8E7CFF)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: kBrand.withOpacity(0.35),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
+    const names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final now = DateTime.now();
+    final monday = DateTime(now.year, now.month, now.day - (now.weekday - 1));
+
+    return Row(
+      children: [
+        for (var i = 0; i < 7; i++)
+          Builder(
+            builder: (context) {
+              final d = DateTime(monday.year, monday.month, monday.day + i);
+              final isToday = d.day == now.day && d.month == now.month;
+              final done = doneDays.contains(DailyStats.keyFor(d));
+              return Expanded(
+                child: Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 3),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  decoration: BoxDecoration(
+                    color: isToday
+                        ? Colors.white
+                        : Colors.white.withOpacity(0.07),
+                    borderRadius: BorderRadius.circular(22),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        names[i],
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: isToday ? Colors.black54 : Colors.white54,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${d.day}',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                          color: isToday ? Colors.black : Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      done
+                          ? Icon(
+                              Icons.check_circle_rounded,
+                              size: 13,
+                              color: isToday ? const Color(0xFF2E7D32) : kBrand,
+                            )
+                          : const SizedBox(height: 13),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
-        ],
+      ],
+    );
+  }
+}
+
+// ───────────────────────── Coach tip ─────────────────────────
+
+class _TipCard extends StatelessWidget {
+  const _TipCard({required this.tip});
+
+  final String tip;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1B2A1A),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: kBrand.withOpacity(0.15)),
       ),
       child: Row(
         children: [
-          SizedBox(
-            width: 120,
-            height: 120,
-            child: CustomPaint(
-              painter: _RingPainter(progress: user.calorieProgress),
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      fmt(t.caloriesEaten),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    Text(
-                      'of ${fmt(user.calorieGoal)} kcal',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: kBrand, width: 3),
             ),
+            child: const Icon(Icons.auto_awesome, size: 16, color: kBrand),
           ),
-          const SizedBox(width: 20),
+          const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              children: [
-                _MacroBar(
-                  label: 'Protein',
-                  value: t.proteinG,
-                  goal: user.proteinGoalG,
-                ),
-                const SizedBox(height: 12),
-                _MacroBar(
-                  label: 'Carbs',
-                  value: t.carbsG,
-                  goal: user.carbsGoalG,
-                ),
-                const SizedBox(height: 12),
-                _MacroBar(label: 'Fat', value: t.fatG, goal: user.fatGoalG),
-              ],
+            child: Text(
+              tip,
+              style: Theme.of(context).textTheme.bodyMedium
+                  ?.copyWith(height: 1.35),
             ),
           ),
         ],
@@ -703,179 +809,71 @@ class _CalorieCard extends StatelessWidget {
   }
 }
 
-class _MacroBar extends StatelessWidget {
-  const _MacroBar({
+// ───────────────────────── Lime pill button ─────────────────────────
+
+class _PillButton extends StatelessWidget {
+  const _PillButton({
     required this.label,
-    required this.value,
-    required this.goal,
+    required this.icon,
+    required this.onTap,
+    this.busy = false,
   });
 
   final String label;
-  final int value;
-  final int goal;
+  final IconData icon;
+  final VoidCallback? onTap;
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              label,
-              style: const TextStyle(color: Colors.white, fontSize: 12),
-            ),
-            Text(
-              '${value}g / ${goal}g',
-              style: const TextStyle(color: Colors.white70, fontSize: 11),
-            ),
-          ],
-        ),
-        const SizedBox(height: 5),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: LinearProgressIndicator(
-            value: goal <= 0 ? 0.0 : (value / goal).clamp(0.0, 1.0),
-            minHeight: 6,
-            backgroundColor: Colors.white24,
-            valueColor: const AlwaysStoppedAnimation(Colors.white),
+    return Opacity(
+      opacity: onTap == null ? 0.6 : 1,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            color: kBrand,
+            borderRadius: BorderRadius.circular(20),
           ),
-        ),
-      ],
-    );
-  }
-}
-
-class _RingPainter extends CustomPainter {
-  _RingPainter({required this.progress});
-
-  final double progress;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    const stroke = 11.0;
-    final arcRect = (Offset.zero & size).deflate(stroke / 2);
-
-    final track = Paint()
-      ..color = Colors.white24
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = stroke;
-    final bar = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeWidth = stroke;
-
-    canvas.drawArc(arcRect, 0, math.pi * 2, false, track);
-    canvas.drawArc(
-      arcRect,
-      -math.pi / 2,
-      math.pi * 2 * progress.clamp(0.0, 1.0),
-      false,
-      bar,
-    );
-  }
-
-  @override
-  bool shouldRepaint(_RingPainter old) => old.progress != progress;
-}
-
-// ───────────────────────── AI Coach ─────────────────────────
-
-class _AiCoachCard extends StatelessWidget {
-  const _AiCoachCard({
-    required this.tip,
-    required this.busyWorkout,
-    required this.busyMeal,
-    required this.onGenerateWorkout,
-    required this.onGenerateMeals,
-  });
-
-  final String tip;
-  final bool busyWorkout;
-  final bool busyMeal;
-  final VoidCallback onGenerateWorkout;
-  final VoidCallback onGenerateMeals;
-
-  @override
-  Widget build(BuildContext context) {
-    return Surface(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [kBrand, kPink]),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(
-                  Icons.auto_awesome,
-                  color: Colors.white,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
+              busy
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.black,
+                      ),
+                    )
+                  : Icon(icon, size: 14, color: Colors.black),
+              const SizedBox(width: 5),
               Text(
-                'AI Coach',
-                style: Theme.of(context).textTheme.titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w700),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            tip,
-            style: Theme.of(context).textTheme.bodyMedium
-                ?.copyWith(height: 1.4),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: busyWorkout ? null : onGenerateWorkout,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: kBrand,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                  icon: busyWorkout
-                      ? const Spinner(color: Colors.white)
-                      : const Icon(Icons.bolt_rounded, size: 18),
-                  label: const Text('Workout'),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: busyMeal ? null : onGenerateMeals,
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                  icon: busyMeal
-                      ? const Spinner()
-                      : const Icon(Icons.restaurant_menu_rounded, size: 18),
-                  label: const Text('Meal plan'),
+                label,
+                style: const TextStyle(
+                  color: Colors.black,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
                 ),
               ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }
 }
 
-// ───────────────────────── Workout ─────────────────────────
+// ───────────────────────── Workout card ─────────────────────────
 
-class _WorkoutSection extends StatelessWidget {
-  const _WorkoutSection({
+class _WorkoutCard extends StatelessWidget {
+  const _WorkoutCard({
     required this.plan,
     required this.day,
     required this.busy,
+    required this.completed,
     required this.onGenerate,
     required this.onStart,
   });
@@ -883,11 +881,14 @@ class _WorkoutSection extends StatelessWidget {
   final WorkoutPlan? plan;
   final WorkoutDay? day;
   final bool busy;
+  final bool completed;
   final VoidCallback onGenerate;
   final VoidCallback onStart;
 
   @override
   Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+
     if (plan == null) {
       return EmptyState(
         icon: Icons.fitness_center,
@@ -909,10 +910,10 @@ class _WorkoutSection extends StatelessWidget {
               width: 52,
               height: 52,
               decoration: BoxDecoration(
-                color: kAccent.withOpacity(0.15),
+                color: kBrand.withOpacity(0.15),
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: const Icon(Icons.self_improvement_rounded, color: kAccent),
+              child: const Icon(Icons.self_improvement_rounded, color: kBrand),
             ),
             const SizedBox(width: 14),
             Expanded(
@@ -921,13 +922,14 @@ class _WorkoutSection extends StatelessWidget {
                 children: [
                   Text(
                     'Rest day',
-                    style: Theme.of(context).textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w700),
+                    style: textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     'Recovery is part of the plan. Stretch, walk and hydrate.',
-                    style: Theme.of(context).textTheme.bodySmall,
+                    style: textTheme.bodySmall,
                   ),
                 ],
               ),
@@ -937,117 +939,388 @@ class _WorkoutSection extends StatelessWidget {
       );
     }
 
-    final shown = d.exercises.take(4).toList();
-    final more = d.exercises.length - shown.length;
-
-    return Surface(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: kWarm.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: const Icon(Icons.fitness_center, color: kWarm),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
+    return Container(
+      decoration: BoxDecoration(
+        color: kCard,
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 18, 8, 18),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Text(
                       d.title,
-                      style: Theme.of(context).textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w700),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        height: 1.15,
+                      ),
                     ),
-                    const SizedBox(height: 2),
+                    const SizedBox(height: 6),
                     Text(
                       d.focus.isEmpty ? 'Personalised by AI' : d.focus,
-                      style: Theme.of(context).textTheme.bodySmall,
+                      style: textTheme.bodySmall?.copyWith(
+                        color: Colors.white54,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.timer_outlined,
+                          size: 14,
+                          color: Colors.white54,
+                        ),
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: Text(
+                            '${d.durationMinutes} min · '
+                            '${d.exercises.length} exercises',
+                            style: textTheme.bodySmall,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    GestureDetector(
+                      onTap: onStart,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: kBrand,
+                          borderRadius: BorderRadius.circular(22),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (completed) ...[
+                              const Icon(
+                                Icons.check_circle_rounded,
+                                size: 16,
+                                color: Colors.black,
+                              ),
+                              const SizedBox(width: 6),
+                            ],
+                            Text(
+                              completed ? 'Completed' : 'Start workout',
+                              style: const TextStyle(
+                                color: Colors.black,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ],
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              InfoChip(
-                icon: Icons.timer_outlined,
-                text: '${d.durationMinutes} min',
+            ),
+            // Stand-in for the photo in the reference design. Swap this
+            // for Image.asset(...) / Image.network(...) if you add pictures.
+            Container(
+              width: 124,
+              margin: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFF2F6B1F), Color(0xFF101A0E)],
+                ),
               ),
-              InfoChip(
-                icon: Icons.list_alt_rounded,
-                text: '${d.exercises.length} exercises',
-              ),
-              InfoChip(
-                icon: Icons.local_fire_department_outlined,
-                text: '${d.estimatedCalories} kcal',
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          for (var i = 0; i < shown.length; i++)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 5),
-              child: Row(
+              child: Stack(
                 children: [
-                  CircleAvatar(
-                    radius: 11,
-                    backgroundColor: kBrand.withOpacity(0.12),
-                    child: Text(
-                      '${i + 1}',
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: kBrand,
-                        fontWeight: FontWeight.w700,
+                  const Center(
+                    child: Icon(
+                      Icons.fitness_center_rounded,
+                      size: 52,
+                      color: kBrand,
+                    ),
+                  ),
+                  Positioned(
+                    left: 10,
+                    right: 10,
+                    bottom: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 5),
+                      decoration: BoxDecoration(
+                        color: Colors.black38,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(
+                            Icons.local_fire_department_outlined,
+                            size: 12,
+                            color: Colors.white70,
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            '${d.estimatedCalories} kcal',
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                        ],
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      shown[i].name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  Text(
-                    '${shown[i].sets} × ${shown[i].reps}',
-                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
               ),
             ),
-          if (more > 0)
-            Padding(
-              padding: const EdgeInsets.only(top: 4, left: 2),
-              child: Text(
-                '+$more more exercises',
-                style: Theme.of(context).textTheme.bodySmall,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ───────────────────────── Calories ─────────────────────────
+
+class _CalorieCard extends StatelessWidget {
+  const _CalorieCard({required this.user});
+
+  final AppUser user;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = user.today;
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: kCard,
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 112,
+            height: 112,
+            child: CustomPaint(
+              painter: _RingPainter(progress: user.calorieProgress),
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      fmt(t.caloriesEaten),
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    Text(
+                      'of ${fmt(user.calorieGoal)} kcal',
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: onStart,
-              style: FilledButton.styleFrom(
-                backgroundColor: kAccent,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-              ),
-              child: const Text('Start workout'),
+          ),
+          const SizedBox(width: 20),
+          Expanded(
+            child: Column(
+              children: [
+                _MacroBar(
+                  label: 'Protein',
+                  value: t.proteinG,
+                  goal: user.proteinGoalG,
+                  color: kBrand,
+                ),
+                const SizedBox(height: 12),
+                _MacroBar(
+                  label: 'Carbs',
+                  value: t.carbsG,
+                  goal: user.carbsGoalG,
+                  color: kWarm,
+                ),
+                const SizedBox(height: 12),
+                _MacroBar(
+                  label: 'Fat',
+                  value: t.fatG,
+                  goal: user.fatGoalG,
+                  color: kPink,
+                ),
+              ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _MacroBar extends StatelessWidget {
+  const _MacroBar({
+    required this.label,
+    required this.value,
+    required this.goal,
+    required this.color,
+  });
+
+  final String label;
+  final int value;
+  final int goal;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label, style: const TextStyle(fontSize: 12)),
+            Text(
+              '${value}g / ${goal}g',
+              style: const TextStyle(color: Colors.white54, fontSize: 11),
+            ),
+          ],
+        ),
+        const SizedBox(height: 5),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: goal <= 0 ? 0.0 : (value / goal).clamp(0.0, 1.0),
+            minHeight: 6,
+            backgroundColor: Colors.white12,
+            valueColor: AlwaysStoppedAnimation(color),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _RingPainter extends CustomPainter {
+  _RingPainter({required this.progress});
+
+  final double progress;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const stroke = 11.0;
+    final arcRect = (Offset.zero & size).deflate(stroke / 2);
+
+    final track = Paint()
+      ..color = Colors.white12
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke;
+    final bar = Paint()
+      ..color = kBrand
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = stroke;
+
+    canvas.drawArc(arcRect, 0, math.pi * 2, false, track);
+    canvas.drawArc(
+      arcRect,
+      -math.pi / 2,
+      math.pi * 2 * progress.clamp(0.0, 1.0),
+      false,
+      bar,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_RingPainter old) => old.progress != progress;
+}
+
+// ───────────────────────── Bottom navigation ─────────────────────────
+
+class _NavBar extends StatelessWidget {
+  const _NavBar({required this.index, required this.onChanged});
+
+  final int index;
+  final ValueChanged<int> onChanged;
+
+  static const _icons = [
+    Icons.home_rounded,
+    Icons.fitness_center_rounded,
+    Icons.dynamic_feed_rounded,
+    Icons.restaurant_rounded,
+    Icons.person_rounded,
+  ];
+  static const _labels = ['Home', 'Workouts', 'Feed', 'Nutrition', 'Profile'];
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: Container(
+          height: 70,
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          decoration: BoxDecoration(
+            color: kCard,
+            borderRadius: BorderRadius.circular(35),
+            border: Border.all(color: Colors.white10),
+          ),
+          child: Row(
+            children: [
+              for (var i = 0; i < _icons.length; i++)
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => onChanged(i),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      margin: const EdgeInsets.symmetric(
+                        vertical: 8,
+                        horizontal: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: i == index ? Colors.white : Colors.transparent,
+                        borderRadius: BorderRadius.circular(28),
+                      ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            _icons[i],
+                            size: 22,
+                            color: i == index ? Colors.black : Colors.white54,
+                          ),
+                          const SizedBox(height: 2),
+                          FittedBox(
+                            child: Text(
+                              _labels[i],
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: i == index
+                                    ? Colors.black
+                                    : Colors.white54,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

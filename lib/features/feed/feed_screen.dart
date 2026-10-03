@@ -49,9 +49,9 @@ class _FeedScreenState extends State<FeedScreen> {
     _repo
         .toggleLike(p.id, widget.uid, like: !p.isLikedBy(widget.uid))
         .catchError((Object e) {
-      debugPrint('Like failed: $e');
-      _toast('Could not update like');
-    });
+          debugPrint('Like failed: $e');
+          _toast('Could not update like');
+        });
   }
 
   Future<void> _delete(Post p) async {
@@ -445,7 +445,9 @@ class _ComposeSheetState extends State<_ComposeSheet> {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+      ),
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
         child: Column(
@@ -516,9 +518,8 @@ class _ComposeSheetState extends State<_ComposeSheet> {
               const SizedBox(height: 8),
               Text(
                 _error!,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(color: kPink),
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: kPink),
               ),
             ],
             const SizedBox(height: 12),
@@ -534,7 +535,7 @@ class _ComposeSheetState extends State<_ComposeSheet> {
                   onPressed: _canPost ? _submit : null,
                   style: FilledButton.styleFrom(backgroundColor: kBrand),
                   icon: _posting
-                      ? const Spinner(color: Colors.white)
+                      ? const Spinner(color: Colors.black)
                       : const Icon(Icons.send_rounded, size: 18),
                   label: Text(_posting ? 'Posting...' : 'Post'),
                 ),
