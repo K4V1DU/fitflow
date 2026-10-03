@@ -75,17 +75,33 @@ class _LoginScreenState extends State<LoginScreen> {
           children: [
             Center(
               child: Container(
-                width: 88,
-                height: 88,
+                width: 96,
+                height: 96,
                 decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: kCard,
-                  border: Border.all(color: kBrand, width: 3),
+                  borderRadius: BorderRadius.circular(40),
+                  boxShadow: [
+                    BoxShadow(
+                      color: kBrand.withOpacity(0.25),
+                      blurRadius: 40,
+                      spreadRadius: 1,
+                    ),
+                  ],
                 ),
-                child: const Icon(
-                  Icons.fitness_center_rounded,
-                  size: 40,
-                  color: kBrand,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(26),
+                  child: Image.asset(
+                    'assets/icon/icon.png',
+                    fit: BoxFit.cover,
+                    // Falls back to the old icon if the asset is missing.
+                    errorBuilder: (_, __, ___) => Container(
+                      color: kCard,
+                      child: const Icon(
+                        Icons.fitness_center_rounded,
+                        size: 40,
+                        color: kBrand,
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
