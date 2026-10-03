@@ -22,7 +22,7 @@ class LoadedUser {
 /// the UI on write futures.
 class UserRepository {
   UserRepository({FirebaseFirestore? db})
-      : _db = db ?? FirebaseFirestore.instance;
+    : _db = db ?? FirebaseFirestore.instance;
 
   final FirebaseFirestore _db;
 
@@ -40,18 +40,43 @@ class UserRepository {
     AppUser user = base;
     final data = snap.data();
     if (snap.exists && data != null) {
-      final stored = AppUser.fromMap(data);
-      user = stored.copyWith(displayName: stored.displayName ?? base.displayName);
+      // The profile doc is created at sign-up with only {createdAt, email,
+      // name}. It has no `uid` or `displayName`, so take the uid from the
+      // document id / auth (never from the map, or it becomes '' and every
+      // later save is skipped) and read the name from `name`.
+      final storedEmail = data['email'];
+      final stored = AppUser.fromMap({
+        ...data,
+        'uid': base.uid,
+        'email': (storedEmail is String && storedEmail.isNotEmpty)
+            ? storedEmail
+            : base.email,
+        'displayName': data['displayName'] ?? data['name'],
+      });
+      user = stored.copyWith(
+        displayName: stored.displayName ?? base.displayName,
+      );
+
+      // Backfill the uid so the document is complete from now on.
+      if (data['uid'] != base.uid) {
+        ref.set({'uid': base.uid}, SetOptions(merge: true)).catchError((_) {});
+      }
     } else {
       // New user: create the profile in the background.
       ref.set(_profileMap(base)).catchError((_) {});
     }
 
-    // Day documents are named yyyy-MM-dd, so sorting by id sorts by date.
+    // Day documents are named yyyy-MM-dd, so comparing ids compares dates.
+    // A range filter on the id (default ascending order) works with
+    // Firestore's built-in index, unlike a descending sort which needs a
+    // custom index.
+    final now = DateTime.now();
+    final firstDay = DailyStats.keyFor(
+      DateTime(now.year, now.month, now.day - 6),
+    );
     final daysSnap = await ref
         .collection('days')
-        .orderBy(FieldPath.documentId, descending: true)
-        .limit(7)
+        .where(FieldPath.documentId, isGreaterThanOrEqualTo: firstDay)
         .get();
 
     final todayKey = DailyStats.keyFor(DateTime.now());
@@ -64,9 +89,7 @@ class UserRepository {
       final stats = DailyStats.fromMap({...m, 'date': d.id});
       if (d.id == todayKey) {
         today = stats;
-        eaten = (m['eatenMeals'] as List? ?? const [])
-            .map((e) => '$e')
-            .toSet();
+        eaten = (m['eatenMeals'] as List? ?? const []).map((e) => '$e').toSet();
       } else {
         history.add(stats);
       }
@@ -77,8 +100,9 @@ class UserRepository {
         .orderBy('startedAt', descending: true)
         .limit(20)
         .get();
-    final activities =
-        actSnap.docs.map((d) => ActivityEntry.fromMap(d.data())).toList();
+    final activities = actSnap.docs
+        .map((d) => ActivityEntry.fromMap(d.data()))
+        .toList();
 
     return LoadedUser(
       user: user.copyWith(
@@ -107,16 +131,17 @@ class UserRepository {
   Future<void> saveProfile(AppUser u) =>
       _userDoc(u.uid).set(_profileMap(u), SetOptions(merge: true));
 
-  Future<void> saveDay(String uid, DailyStats d) => _userDoc(uid)
-      .collection('days')
-      .doc(d.key)
-      .set(d.toMap(), SetOptions(merge: true));
+  Future<void> saveDay(String uid, DailyStats d) =>
+      _userDoc(uid)
+          .collection('days')
+          .doc(d.key)
+          .set(d.toMap(), SetOptions(merge: true));
 
   Future<void> saveEatenMeals(String uid, String dayKey, Set<String> keys) =>
-      _userDoc(uid).collection('days').doc(dayKey).set(
-        {'date': dayKey, 'eatenMeals': keys.toList()},
-        SetOptions(merge: true),
-      );
+      _userDoc(uid).collection('days').doc(dayKey).set({
+        'date': dayKey,
+        'eatenMeals': keys.toList(),
+      }, SetOptions(merge: true));
 
   Future<void> saveWorkoutPlan(String uid, WorkoutPlan plan) =>
       _userDoc(uid).set({'workoutPlan': plan.toMap()}, SetOptions(merge: true));

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../../entities/app_user.dart';
@@ -7,24 +8,19 @@ import '../../entities/meal_plan.dart';
 import '../../entities/workout_plan.dart';
 import '../../services/ai_plan_service.dart';
 import '../../services/auth_service.dart';
+import '../../services/user_repository.dart'; // adjust path if needed
+import '../../widgets/common.dart';
+import '../feed/feed_screen.dart';
+import '../nutrition/nutrition_screen.dart';
+import '../profile/profile_screen.dart';
+import '../workouts/workouts_screen.dart';
 
 const _kApiBaseUrl = 'https://backend-six-green-45.vercel.app';
 
 /// Fills the dashboard with sample numbers until real tracking
 /// (step counter, sleep, etc.) is connected. Set to false for a clean start.
+/// Keep this false while testing persistence.
 const _kUseDemoData = false;
-
-const _brand = Color(0xFF6C5CE7);
-const _brandLight = Color(0xFFA29BFE);
-const _accent = Color(0xFF00D2A0);
-const _warm = Color(0xFFFF9F43);
-const _pink = Color(0xFFFF6B81);
-const _blue = Color(0xFF4DA8FF);
-
-String _fmt(int n) =>
-    n.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
-
-String _cap(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -33,11 +29,15 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _auth = AuthService();
+  final _repo = UserRepository();
   late final AiPlanService _ai;
   late AppUser _user;
 
+  bool _loading = true;
+  bool _loadFailed = false;
+  String? _loadError;
   int _navIndex = 0;
   bool _busyWorkout = false;
   bool _busyMeal = false;
@@ -51,18 +51,91 @@ class _HomeScreenState extends State<HomeScreen> {
     _ai = AiPlanService(baseUrl: _kApiBaseUrl);
 
     final u = _auth.currentUser;
-    final base = AppUser.newUser(
+    _user = AppUser.newUser(
       uid: u?.uid ?? '',
       email: u?.email ?? '',
       displayName: u?.displayName,
     );
-    _user = _kUseDemoData ? _withDemoData(base) : base;
+
+    WidgetsBinding.instance.addObserver(this);
+    _init();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _ai.dispose();
     super.dispose();
+  }
+
+  /// If the app stays open past midnight, reload so "today" is the new day.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        !_loading &&
+        !_loadFailed &&
+        _user.uid.isNotEmpty &&
+        DailyStats.keyFor(DateTime.now()) != _user.today.key) {
+      _load();
+    }
+  }
+
+  // ── Persistence ──
+
+  /// After an app reload the signed-in user is restored asynchronously
+  /// (especially on web), so wait for the first auth state before reading
+  /// Firestore. Reading too early gave an empty uid and a blank dashboard.
+  Future<void> _init() async {
+    final fbUser = await FirebaseAuth.instance.authStateChanges().first;
+    if (!mounted) return;
+    if (fbUser == null) {
+      setState(() => _loading = false);
+      return;
+    }
+    _user = AppUser.newUser(
+      uid: fbUser.uid,
+      email: fbUser.email ?? '',
+      displayName: fbUser.displayName,
+    );
+    await _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final loaded = await _repo.load(_user);
+      if (!mounted) return;
+      setState(() {
+        _user = _kUseDemoData ? _withDemoData(loaded.user) : loaded.user;
+        _eaten
+          ..clear()
+          ..addAll(loaded.eatenMeals);
+        _loading = false;
+        _loadFailed = false;
+      });
+    } catch (e) {
+      debugPrint('Load failed: $e');
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _loadFailed = true;
+        _loadError = '$e';
+      });
+    }
+  }
+
+  /// Fire-and-forget save. Firestore queues writes while offline, so never
+  /// await these in the UI path.
+  void _persist(Future<void> Function() write) {
+    if (_user.uid.isEmpty) return;
+    try {
+      write().catchError((Object e) {
+        debugPrint('Save failed: $e');
+        _toast('Could not save changes');
+      });
+    } catch (e) {
+      debugPrint('Save failed: $e');
+      _toast('Could not save changes');
+    }
   }
 
   // ── Derived view: stored stats + meals ticked off today ──
@@ -109,6 +182,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final plan = await _ai.generateWorkoutPlan(_user);
       if (!mounted) return;
       setState(() => _user = _user.copyWith(workoutPlan: plan));
+      _persist(() => _repo.saveWorkoutPlan(_user.uid, plan));
       _toast('Your new workout plan is ready');
     } on AiPlanException catch (e) {
       _toast(e.message);
@@ -127,6 +201,8 @@ class _HomeScreenState extends State<HomeScreen> {
         _user = _user.copyWith(mealPlan: plan);
         _eaten.clear();
       });
+      _persist(() => _repo.saveMealPlan(_user.uid, plan));
+      _persist(() => _repo.saveEatenMeals(_user.uid, _user.today.key, _eaten));
       _toast('Your new meal plan is ready');
     } on AiPlanException catch (e) {
       _toast(e.message);
@@ -135,13 +211,83 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _addWater() => setState(() => _user = _user.addWater(250));
+  /// Applies a change to today's stats and saves it.
+  /// Saves _user.today, NOT _view.today: the view includes eaten-meal macros,
+  /// and saving those would double-count them on the next load.
+  void _updateToday(DailyStats Function(DailyStats t) change) {
+    setState(() => _user = _user.copyWith(today: change(_user.today)));
+    _persist(() => _repo.saveDay(_user.uid, _user.today));
+  }
+
+  void _addWater() => _updateToday((t) => t.copyWith(waterMl: t.waterMl + 250));
+
+  Future<void> _logSteps() async {
+    final v = await showDialog<double>(
+      context: context,
+      builder: (_) => _NumberDialog(
+        title: 'Steps today',
+        label: 'Total steps',
+        suffix: 'steps',
+        initial: _user.today.steps == 0 ? '' : '${_user.today.steps}',
+      ),
+    );
+    if (v == null || !mounted) return;
+    final steps = v.round().clamp(0, 200000);
+    _updateToday((t) => t.copyWith(steps: steps));
+  }
+
+  Future<void> _logSleep() async {
+    final hours = _user.today.sleepMinutes / 60;
+    final v = await showDialog<double>(
+      context: context,
+      builder: (_) => _NumberDialog(
+        title: 'Sleep last night',
+        label: 'Hours slept',
+        suffix: 'h',
+        decimal: true,
+        initial: hours == 0 ? '' : hours.toStringAsFixed(1),
+      ),
+    );
+    if (v == null || !mounted) return;
+    final minutes = (v * 60).round().clamp(0, 24 * 60);
+    _updateToday((t) => t.copyWith(sleepMinutes: minutes));
+  }
 
   void _toggleMeal(Meal m) {
     final key = _mealKey(m);
     setState(() {
       if (!_eaten.remove(key)) _eaten.add(key);
     });
+    _persist(() => _repo.saveEatenMeals(_user.uid, _user.today.key, _eaten));
+  }
+
+  /// One workout can be logged per day; the id makes that checkable.
+  String get _todayWorkoutId => 'workout-${_user.today.key}';
+
+  bool get _workoutDoneToday =>
+      _user.activities.any((a) => a.id == _todayWorkoutId);
+
+  void _completeWorkout(WorkoutDay d) {
+    if (_workoutDoneToday) return;
+    final entry = ActivityEntry(
+      id: _todayWorkoutId,
+      type: 'strength',
+      startedAt: DateTime.now(),
+      durationMinutes: d.durationMinutes,
+      caloriesBurned: d.estimatedCalories,
+      notes: d.title,
+    );
+    setState(() => _user = _user.logActivity(entry));
+    _persist(() => _repo.addActivity(_user.uid, entry));
+    // Save _user.today (activeMinutes / caloriesBurned changed), not _view.
+    _persist(() => _repo.saveDay(_user.uid, _user.today));
+    _toast('Workout logged. Nice work!');
+  }
+
+  void _saveProfile(AppUser updated) {
+    setState(() => _user = updated);
+    _persist(() => _repo.saveProfile(_user));
+    _toast('Profile saved');
   }
 
   String get _greeting {
@@ -171,109 +317,83 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (_loadFailed) {
+      // Don't show an empty dashboard: saving from it would overwrite
+      // the real data with zeros.
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off_rounded, size: 48),
+              const SizedBox(height: 12),
+              const Text('Could not load your data'),
+              if (_loadError != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+                  child: SelectableText(
+                    _loadError!,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: () {
+                  setState(() {
+                    _loading = true;
+                    _loadFailed = false;
+                  });
+                  _load();
+                },
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final u = _view;
-    final workoutDay = u.workoutPlan?.today;
-    final mealDay = u.mealPlan?.today;
 
     return Scaffold(
       backgroundColor: isDark
           ? const Color(0xFF111118)
           : const Color(0xFFF5F6FA),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-          children: [
-            _Header(greeting: _greeting, name: u.name, onLogout: _auth.logout),
-            const SizedBox(height: 20),
-            _CalorieCard(user: u),
-            const SizedBox(height: 16),
-            _AiCoachCard(
-              tip: _coachTip(u),
-              busyWorkout: _busyWorkout,
-              busyMeal: _busyMeal,
-              onGenerateWorkout: _generateWorkout,
-              onGenerateMeals: _generateMeals,
-            ),
-            const SizedBox(height: 24),
-            _SectionTitle(
-              'Today\'s workout',
-              actionLabel: u.workoutPlan != null ? 'Regenerate' : null,
-              onAction: _busyWorkout ? null : _generateWorkout,
-            ),
-            const SizedBox(height: 12),
-            _WorkoutSection(
-              plan: u.workoutPlan,
-              day: workoutDay,
-              busy: _busyWorkout,
-              onGenerate: _generateWorkout,
-              onStart: () => _toast('Workout player coming soon'),
-            ),
-            const SizedBox(height: 24),
-            Row(
-              children: [
-                Expanded(
-                  child: _StatTile(
-                    icon: Icons.directions_walk_rounded,
-                    color: _accent,
-                    value: _fmt(u.today.steps),
-                    label: 'Steps',
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _StatTile(
-                    icon: Icons.water_drop_rounded,
-                    color: _blue,
-                    value: '${u.today.waterLitres.toStringAsFixed(2)} L',
-                    label: 'Water',
-                    onAdd: _addWater,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _StatTile(
-                    icon: Icons.bedtime_rounded,
-                    color: _brandLight,
-                    value: u.today.sleepLabel,
-                    label: 'Sleep',
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            const _SectionTitle('Weekly activity'),
-            const SizedBox(height: 12),
-            _WeeklyChart(days: u.last7Days),
-            const SizedBox(height: 24),
-            _SectionTitle(
-              'Today\'s meals',
-              actionLabel: u.mealPlan != null ? 'Regenerate' : null,
-              onAction: _busyMeal ? null : _generateMeals,
-            ),
-            const SizedBox(height: 12),
-            _MealSection(
-              plan: u.mealPlan,
-              day: mealDay,
-              busy: _busyMeal,
-              eaten: _eaten,
-              keyOf: _mealKey,
-              onGenerate: _generateMeals,
-              onToggle: _toggleMeal,
-            ),
-          ],
-        ),
+      body: IndexedStack(
+        index: _navIndex,
+        children: [
+          _homeTab(u),
+          WorkoutsScreen(
+            plan: _user.workoutPlan,
+            busy: _busyWorkout,
+            completedToday: _workoutDoneToday,
+            onGenerate: _generateWorkout,
+            onComplete: _completeWorkout,
+          ),
+          FeedScreen(uid: _user.uid, authorName: _user.name),
+          NutritionScreen(
+            user: u,
+            busy: _busyMeal,
+            eaten: _eaten,
+            keyOf: _mealKey,
+            onGenerate: _generateMeals,
+            onToggle: _toggleMeal,
+          ),
+          ProfileScreen(
+            user: _user,
+            onSave: _saveProfile,
+            onLogout: _auth.logout,
+          ),
+        ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _navIndex,
-        onDestinationSelected: (i) {
-          setState(() => _navIndex = i);
-          if (i != 0) {
-            _toast(
-              '${['', 'Workouts', 'Feed', 'Nutrition', 'Profile'][i]} coming soon',
-            );
-          }
-        },
+        onDestinationSelected: (i) => setState(() => _navIndex = i),
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),
@@ -299,6 +419,96 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icon(Icons.person_outline),
             selectedIcon: Icon(Icons.person),
             label: 'Profile',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _homeTab(AppUser u) {
+    return SafeArea(
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        children: [
+          _Header(greeting: _greeting, name: u.name, onLogout: _auth.logout),
+          const SizedBox(height: 20),
+          _CalorieCard(user: u),
+          const SizedBox(height: 16),
+          _AiCoachCard(
+            tip: _coachTip(u),
+            busyWorkout: _busyWorkout,
+            busyMeal: _busyMeal,
+            onGenerateWorkout: _generateWorkout,
+            onGenerateMeals: _generateMeals,
+          ),
+          const SizedBox(height: 24),
+          SectionTitle(
+            'Today\'s workout',
+            actionLabel: u.workoutPlan != null ? 'Regenerate' : null,
+            onAction: _busyWorkout ? null : _generateWorkout,
+          ),
+          const SizedBox(height: 12),
+          _WorkoutSection(
+            plan: u.workoutPlan,
+            day: u.workoutPlan?.today,
+            busy: _busyWorkout,
+            onGenerate: _generateWorkout,
+            // Jump to the Workouts tab where it can be completed.
+            onStart: () => setState(() => _navIndex = 1),
+          ),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: _StatTile(
+                  icon: Icons.directions_walk_rounded,
+                  color: kAccent,
+                  value: fmt(u.today.steps),
+                  label: 'Steps',
+                  onTap: _logSteps,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _StatTile(
+                  icon: Icons.water_drop_rounded,
+                  color: kBlue,
+                  value: '${u.today.waterLitres.toStringAsFixed(2)} L',
+                  label: 'Water',
+                  onAdd: _addWater,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _StatTile(
+                  icon: Icons.bedtime_rounded,
+                  color: kBrandLight,
+                  value: u.today.sleepLabel,
+                  label: 'Sleep',
+                  onTap: _logSleep,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          const SectionTitle('Weekly activity'),
+          const SizedBox(height: 12),
+          _WeeklyChart(days: u.last7Days),
+          const SizedBox(height: 24),
+          SectionTitle(
+            'Today\'s meals',
+            actionLabel: u.mealPlan != null ? 'Regenerate' : null,
+            onAction: _busyMeal ? null : _generateMeals,
+          ),
+          const SizedBox(height: 12),
+          _MealSection(
+            plan: u.mealPlan,
+            day: u.mealPlan?.today,
+            busy: _busyMeal,
+            eaten: _eaten,
+            keyOf: _mealKey,
+            onGenerate: _generateMeals,
+            onToggle: _toggleMeal,
           ),
         ],
       ),
@@ -333,164 +543,6 @@ AppUser _withDemoData(AppUser base) {
     ),
     history: history,
   );
-}
-
-// ───────────────────────── Shared pieces ─────────────────────────
-
-class _Surface extends StatelessWidget {
-  const _Surface({
-    required this.child,
-    this.padding = const EdgeInsets.all(16),
-  });
-
-  final Widget child;
-  final EdgeInsetsGeometry padding;
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      width: double.infinity,
-      padding: padding,
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1C1C26) : Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: isDark
-            ? null
-            : [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 16,
-                  offset: const Offset(0, 6),
-                ),
-              ],
-      ),
-      child: child,
-    );
-  }
-}
-
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle(this.title, {this.actionLabel, this.onAction});
-
-  final String title;
-  final String? actionLabel;
-  final VoidCallback? onAction;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: Text(
-            title,
-            style: Theme.of(context).textTheme.titleMedium
-                ?.copyWith(fontWeight: FontWeight.w700),
-          ),
-        ),
-        if (actionLabel != null)
-          TextButton(onPressed: onAction, child: Text(actionLabel!)),
-      ],
-    );
-  }
-}
-
-class _Spinner extends StatelessWidget {
-  const _Spinner({this.color});
-  final Color? color;
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-    width: 18,
-    height: 18,
-    child: CircularProgressIndicator(strokeWidth: 2, color: color),
-  );
-}
-
-class _EmptyState extends StatelessWidget {
-  const _EmptyState({
-    required this.icon,
-    required this.color,
-    required this.title,
-    required this.message,
-    required this.buttonLabel,
-    required this.busy,
-    required this.onPressed,
-  });
-
-  final IconData icon;
-  final Color color;
-  final String title;
-  final String message;
-  final String buttonLabel;
-  final bool busy;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-    return _Surface(
-      child: Column(
-        children: [
-          Container(
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Icon(icon, color: color),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            title,
-            style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: textTheme.bodySmall,
-          ),
-          const SizedBox(height: 14),
-          FilledButton.icon(
-            onPressed: busy ? null : onPressed,
-            style: FilledButton.styleFrom(backgroundColor: _brand),
-            icon: busy
-                ? const _Spinner(color: Colors.white)
-                : const Icon(Icons.auto_awesome, size: 18),
-            label: Text(busy ? 'Generating...' : buttonLabel),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Chip extends StatelessWidget {
-  const _Chip({required this.icon, required this.text});
-
-  final IconData icon;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.onSurface.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14),
-          const SizedBox(width: 4),
-          Text(text, style: const TextStyle(fontSize: 12)),
-        ],
-      ),
-    );
-  }
 }
 
 // ───────────────────────── Header ─────────────────────────
@@ -552,7 +604,7 @@ class _Header extends StatelessWidget {
           ],
           child: CircleAvatar(
             radius: 22,
-            backgroundColor: _brand,
+            backgroundColor: kBrand,
             child: Text(
               name.isNotEmpty ? name[0].toUpperCase() : 'A',
               style: const TextStyle(
@@ -581,14 +633,14 @@ class _CalorieCard extends StatelessWidget {
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [_brand, Color(0xFF8E7CFF)],
+          colors: [kBrand, Color(0xFF8E7CFF)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-            color: _brand.withOpacity(0.35),
+            color: kBrand.withOpacity(0.35),
             blurRadius: 20,
             offset: const Offset(0, 10),
           ),
@@ -606,7 +658,7 @@ class _CalorieCard extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      _fmt(t.caloriesEaten),
+                      fmt(t.caloriesEaten),
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 22,
@@ -614,7 +666,7 @@ class _CalorieCard extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      'of ${_fmt(user.calorieGoal)} kcal',
+                      'of ${fmt(user.calorieGoal)} kcal',
                       style: const TextStyle(
                         color: Colors.white70,
                         fontSize: 11,
@@ -748,7 +800,7 @@ class _AiCoachCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _Surface(
+    return Surface(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -757,7 +809,7 @@ class _AiCoachCard extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [_brand, _pink]),
+                  gradient: const LinearGradient(colors: [kBrand, kPink]),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: const Icon(
@@ -787,11 +839,11 @@ class _AiCoachCard extends StatelessWidget {
                 child: FilledButton.icon(
                   onPressed: busyWorkout ? null : onGenerateWorkout,
                   style: FilledButton.styleFrom(
-                    backgroundColor: _brand,
+                    backgroundColor: kBrand,
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
                   icon: busyWorkout
-                      ? const _Spinner(color: Colors.white)
+                      ? const Spinner(color: Colors.white)
                       : const Icon(Icons.bolt_rounded, size: 18),
                   label: const Text('Workout'),
                 ),
@@ -804,7 +856,7 @@ class _AiCoachCard extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
                   icon: busyMeal
-                      ? const _Spinner()
+                      ? const Spinner()
                       : const Icon(Icons.restaurant_menu_rounded, size: 18),
                   label: const Text('Meal plan'),
                 ),
@@ -837,9 +889,9 @@ class _WorkoutSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (plan == null) {
-      return _EmptyState(
+      return EmptyState(
         icon: Icons.fitness_center,
-        color: _warm,
+        color: kWarm,
         title: 'No workout plan yet',
         message: 'Let AI build a weekly plan for your goal and level.',
         buttonLabel: 'Generate with AI',
@@ -850,17 +902,17 @@ class _WorkoutSection extends StatelessWidget {
 
     final d = day;
     if (d == null || d.isRestDay) {
-      return _Surface(
+      return Surface(
         child: Row(
           children: [
             Container(
               width: 52,
               height: 52,
               decoration: BoxDecoration(
-                color: _accent.withOpacity(0.15),
+                color: kAccent.withOpacity(0.15),
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: const Icon(Icons.self_improvement_rounded, color: _accent),
+              child: const Icon(Icons.self_improvement_rounded, color: kAccent),
             ),
             const SizedBox(width: 14),
             Expanded(
@@ -888,7 +940,7 @@ class _WorkoutSection extends StatelessWidget {
     final shown = d.exercises.take(4).toList();
     final more = d.exercises.length - shown.length;
 
-    return _Surface(
+    return Surface(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -898,10 +950,10 @@ class _WorkoutSection extends StatelessWidget {
                 width: 52,
                 height: 52,
                 decoration: BoxDecoration(
-                  color: _warm.withOpacity(0.15),
+                  color: kWarm.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(16),
                 ),
-                child: const Icon(Icons.fitness_center, color: _warm),
+                child: const Icon(Icons.fitness_center, color: kWarm),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -928,15 +980,15 @@ class _WorkoutSection extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
-              _Chip(
+              InfoChip(
                 icon: Icons.timer_outlined,
                 text: '${d.durationMinutes} min',
               ),
-              _Chip(
+              InfoChip(
                 icon: Icons.list_alt_rounded,
                 text: '${d.exercises.length} exercises',
               ),
-              _Chip(
+              InfoChip(
                 icon: Icons.local_fire_department_outlined,
                 text: '${d.estimatedCalories} kcal',
               ),
@@ -950,12 +1002,12 @@ class _WorkoutSection extends StatelessWidget {
                 children: [
                   CircleAvatar(
                     radius: 11,
-                    backgroundColor: _brand.withOpacity(0.12),
+                    backgroundColor: kBrand.withOpacity(0.12),
                     child: Text(
                       '${i + 1}',
                       style: const TextStyle(
                         fontSize: 11,
-                        color: _brand,
+                        color: kBrand,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -989,7 +1041,7 @@ class _WorkoutSection extends StatelessWidget {
             child: FilledButton(
               onPressed: onStart,
               style: FilledButton.styleFrom(
-                backgroundColor: _accent,
+                backgroundColor: kAccent,
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
               child: const Text('Start workout'),
@@ -1010,6 +1062,7 @@ class _StatTile extends StatelessWidget {
     required this.value,
     required this.label,
     this.onAdd,
+    this.onTap,
   });
 
   final IconData icon;
@@ -1020,41 +1073,57 @@ class _StatTile extends StatelessWidget {
   /// When set, shows a small "+" button (used for water).
   final VoidCallback? onAdd;
 
+  /// When set, tapping the tile lets the user enter a value (steps, sleep).
+  final VoidCallback? onTap;
+
   @override
   Widget build(BuildContext context) {
-    return _Surface(
-      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
-      child: Stack(
-        children: [
-          SizedBox(
-            width: double.infinity,
-            child: Column(
-              children: [
-                Icon(icon, color: color),
-                const SizedBox(height: 8),
-                FittedBox(
-                  child: Text(
-                    value,
-                    style: Theme.of(context).textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w800),
+    return GestureDetector(
+      onTap: onTap,
+      child: Surface(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+        child: Stack(
+          children: [
+            SizedBox(
+              width: double.infinity,
+              child: Column(
+                children: [
+                  Icon(icon, color: color),
+                  const SizedBox(height: 8),
+                  FittedBox(
+                    child: Text(
+                      value,
+                      style: Theme.of(context).textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w800),
+                    ),
                   ),
-                ),
-                Text(label, style: Theme.of(context).textTheme.bodySmall),
-              ],
-            ),
-          ),
-          if (onAdd != null)
-            Positioned(
-              top: -6,
-              right: -8,
-              child: IconButton(
-                tooltip: 'Add 250 ml',
-                visualDensity: VisualDensity.compact,
-                icon: Icon(Icons.add_circle_rounded, color: color, size: 22),
-                onPressed: onAdd,
+                  Text(label, style: Theme.of(context).textTheme.bodySmall),
+                ],
               ),
             ),
-        ],
+            if (onAdd != null)
+              Positioned(
+                top: -6,
+                right: -8,
+                child: IconButton(
+                  tooltip: 'Add 250 ml',
+                  visualDensity: VisualDensity.compact,
+                  icon: Icon(Icons.add_circle_rounded, color: color, size: 22),
+                  onPressed: onAdd,
+                ),
+              )
+            else if (onTap != null)
+              Positioned(
+                top: -2,
+                right: -4,
+                child: Icon(
+                  Icons.edit_rounded,
+                  size: 14,
+                  color: color.withOpacity(0.7),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1076,7 +1145,7 @@ class _WeeklyChart extends StatelessWidget {
     );
     final todayIndex = days.length - 1;
 
-    return _Surface(
+    return Surface(
       child: SizedBox(
         height: 140,
         child: Row(
@@ -1093,7 +1162,7 @@ class _WeeklyChart extends StatelessWidget {
                       decoration: BoxDecoration(
                         gradient: i == todayIndex
                             ? const LinearGradient(
-                                colors: [_brand, _brandLight],
+                                colors: [kBrand, kBrandLight],
                                 begin: Alignment.bottomCenter,
                                 end: Alignment.topCenter,
                               )
@@ -1162,9 +1231,9 @@ class _MealSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (plan == null) {
-      return _EmptyState(
+      return EmptyState(
         icon: Icons.restaurant_menu_rounded,
-        color: _accent,
+        color: kAccent,
         title: 'No meal plan yet',
         message:
             'Let AI plan your meals around your calories, macros and diet.',
@@ -1176,7 +1245,7 @@ class _MealSection extends StatelessWidget {
 
     final d = day;
     if (d == null || d.meals.isEmpty) {
-      return _Surface(
+      return Surface(
         child: Text(
           'No meals planned for today.',
           style: Theme.of(context).textTheme.bodyMedium,
@@ -1190,7 +1259,7 @@ class _MealSection extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.only(bottom: 10, left: 2),
           child: Text(
-            '${_fmt(d.totalCalories)} kcal planned · '
+            '${fmt(d.totalCalories)} kcal planned · '
             'P ${d.totalProteinG}g · C ${d.totalCarbsG}g · F ${d.totalFatG}g',
             style: Theme.of(context).textTheme.bodySmall,
           ),
@@ -1201,7 +1270,7 @@ class _MealSection extends StatelessWidget {
             child: InkWell(
               borderRadius: BorderRadius.circular(20),
               onTap: () => onToggle(m),
-              child: _Surface(
+              child: Surface(
                 padding: const EdgeInsets.all(12),
                 child: Row(
                   children: [
@@ -1209,10 +1278,10 @@ class _MealSection extends StatelessWidget {
                       width: 44,
                       height: 44,
                       decoration: BoxDecoration(
-                        color: _accent.withOpacity(0.15),
+                        color: kAccent.withOpacity(0.15),
                         borderRadius: BorderRadius.circular(14),
                       ),
-                      child: Icon(_iconFor(m.type), color: _accent, size: 22),
+                      child: Icon(_iconFor(m.type), color: kAccent, size: 22),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -1227,7 +1296,7 @@ class _MealSection extends StatelessWidget {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            '${_cap(m.type.name)} · P ${m.proteinG}g · '
+                            '${cap(m.type.name)} · P ${m.proteinG}g · '
                             'C ${m.carbsG}g · F ${m.fatG}g',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -1251,7 +1320,7 @@ class _MealSection extends StatelessWidget {
                               : Icons.radio_button_unchecked,
                           size: 20,
                           color: eaten.contains(keyOf(m))
-                              ? _accent
+                              ? kAccent
                               : Colors.grey,
                         ),
                       ],
@@ -1261,6 +1330,68 @@ class _MealSection extends StatelessWidget {
               ),
             ),
           ),
+      ],
+    );
+  }
+}
+
+// ───────────────────────── Number input dialog ─────────────────────────
+
+class _NumberDialog extends StatefulWidget {
+  const _NumberDialog({
+    required this.title,
+    required this.label,
+    required this.suffix,
+    required this.initial,
+    this.decimal = false,
+  });
+
+  final String title;
+  final String label;
+  final String suffix;
+  final String initial;
+  final bool decimal;
+
+  @override
+  State<_NumberDialog> createState() => _NumberDialogState();
+}
+
+class _NumberDialogState extends State<_NumberDialog> {
+  late final TextEditingController _c = TextEditingController(
+    text: widget.initial,
+  );
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final v = double.tryParse(_c.text.trim().replaceAll(',', '.'));
+    Navigator.pop(context, v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: TextField(
+        controller: _c,
+        autofocus: true,
+        keyboardType: TextInputType.numberWithOptions(decimal: widget.decimal),
+        onSubmitted: (_) => _submit(),
+        decoration: InputDecoration(
+          labelText: widget.label,
+          suffixText: widget.suffix,
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Save')),
       ],
     );
   }
