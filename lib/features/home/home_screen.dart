@@ -8,9 +8,7 @@ import '../../entities/workout_plan.dart';
 import '../../services/ai_plan_service.dart';
 import '../../services/auth_service.dart';
 
-/// Android emulator -> your PC. On a real phone use your PC's LAN IP,
-/// e.g. 'http://192.168.1.20:3000'.
-const _kApiBaseUrl = 'http://10.0.2.2:3000';
+const _kApiBaseUrl = 'https://backend-six-green-45.vercel.app';
 
 /// Fills the dashboard with sample numbers until real tracking
 /// (step counter, sleep, etc.) is connected. Set to false for a clean start.

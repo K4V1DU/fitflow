@@ -8,6 +8,15 @@ const API_KEY = process.env.GEMINI_API_KEY;
 // Pick a model that shows a free tier in Google AI Studio and set it in .env.
 const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 
+// Which AI to use: 'gemini' (default) or 'grok'.
+const PROVIDER = (process.env.AI_PROVIDER || 'gemini').toLowerCase();
+const XAI_KEY = process.env.XAI_API_KEY;
+const XAI_MODEL = process.env.XAI_MODEL || 'grok-4.3';
+
+// Set DEBUG_ERRORS=true while debugging to see the real AI error in responses.
+// Turn it off afterwards so internal errors aren't exposed.
+const DEBUG_ERRORS = process.env.DEBUG_ERRORS === 'true';
+
 if (!API_KEY) {
   // Don't exit: on Vercel a crash at import time takes the whole function down.
   console.error('Missing GEMINI_API_KEY. Set it in .env (local) or in Vercel env vars.');
@@ -66,9 +75,54 @@ async function callGemini(prompt) {
     .join('');
   if (!text) throw new Error('Empty AI response');
 
-  // Strip code fences just in case, then parse.
-  return JSON.parse(text.replace(/```json|```/g, '').trim());
+  return parseJson(text);
 }
+
+// xAI's API is OpenAI-compatible (chat completions).
+async function callGrok(prompt) {
+  if (!XAI_KEY) throw new Error('XAI_API_KEY is not set');
+  const res = await fetch('https://api.x.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${XAI_KEY}`,
+    },
+    body: JSON.stringify({
+      model: XAI_MODEL,
+      temperature: 0.7,
+      messages: [
+        {
+          role: 'system',
+          content: 'You reply with a single valid JSON object and nothing else.',
+        },
+        { role: 'user', content: prompt },
+      ],
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Grok ${res.status}: ${body.slice(0, 300)}`);
+  }
+
+  const data = await res.json();
+  const text = data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('Empty AI response');
+  return parseJson(text);
+}
+
+// Pulls the JSON object out of the reply, even if it is wrapped in code fences.
+function parseJson(text) {
+  const cleaned = text.replace(/```json|```/g, '').trim();
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start === -1 || end === -1) throw new Error('AI did not return JSON');
+  return JSON.parse(cleaned.slice(start, end + 1));
+}
+
+const callAI = (prompt) =>
+  PROVIDER === 'grok' ? callGrok(prompt) : callGemini(prompt);
+const activeModel = PROVIDER === 'grok' ? XAI_MODEL : MODEL;
 
 // ── Prompts ───────────────────────────────────────────────────
 
@@ -165,14 +219,17 @@ app.post('/ai/workout-plan', requireAuth, aiLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Missing user data' });
   }
   try {
-    const plan = await callGemini(workoutPrompt(user, options || {}));
+    const plan = await callAI(workoutPrompt(user, options || {}));
     if (!Array.isArray(plan.days) || plan.days.length === 0) {
       throw new Error('AI returned an invalid workout plan');
     }
     res.json({ plan: wrap(plan) });
   } catch (e) {
     console.error('workout-plan:', e.message);
-    res.status(502).json({ error: 'AI generation failed. Try again.' });
+    res.status(502).json({
+      error: 'AI generation failed. Try again.',
+      ...(DEBUG_ERRORS ? { detail: e.message } : {}),
+    });
   }
 });
 
@@ -182,18 +239,21 @@ app.post('/ai/meal-plan', requireAuth, aiLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Missing user data' });
   }
   try {
-    const plan = await callGemini(mealPrompt(user, options || {}));
+    const plan = await callAI(mealPrompt(user, options || {}));
     if (!Array.isArray(plan.days) || plan.days.length === 0) {
       throw new Error('AI returned an invalid meal plan');
     }
     res.json({ plan: wrap(plan) });
   } catch (e) {
     console.error('meal-plan:', e.message);
-    res.status(502).json({ error: 'AI generation failed. Try again.' });
+    res.status(502).json({
+      error: 'AI generation failed. Try again.',
+      ...(DEBUG_ERRORS ? { detail: e.message } : {}),
+    });
   }
 });
 
-app.get('/health', (_req, res) => res.json({ ok: true, model: MODEL }));
+app.get('/health', (_req, res) => res.json({ ok: true, provider: PROVIDER, model: activeModel }));
 
 // Keeps Express from leaving the serverless function in a bad state on errors.
 app.use((err, _req, res, _next) => {
@@ -204,7 +264,7 @@ app.use((err, _req, res, _next) => {
 // Local dev: `node server.js`. On Vercel the app is exported instead.
 if (require.main === module) {
   app.listen(PORT, () =>
-    console.log(`FitFlow API running on port ${PORT} (model: ${MODEL})`)
+    console.log(`FitFlow API running on port ${PORT} (${PROVIDER}: ${activeModel})`)
   );
 }
 
