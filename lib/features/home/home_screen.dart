@@ -24,6 +24,17 @@ const _kApiBaseUrl = 'https://backend-six-green-45.vercel.app';
 /// Keep this false while testing persistence.
 const _kUseDemoData = false;
 
+/// Images shown in the "Today's workout" card. One is picked at random.
+/// Make sure the folder is declared under `assets:` in pubspec.yaml.
+const _kWorkoutImages = [
+  'assets/images/image1.jpg',
+  'assets/images/image2.jpg',
+  'assets/images/image3.jpg',
+  'assets/images/image4.jpg',
+  'assets/images/image5.jpg',
+  'assets/images/image6.jpg',
+];
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -47,6 +58,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// Meals from today's plan the user has ticked off as eaten.
   final Set<String> _eaten = {};
+
+  /// Picked once per app session so it doesn't change on every rebuild.
+  final String _workoutImage =
+      _kWorkoutImages[math.Random().nextInt(_kWorkoutImages.length)];
 
   @override
   void initState() {
@@ -509,6 +524,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 day: plan?.today,
                 busy: _busyWorkout,
                 completed: _workoutDoneToday,
+                imagePath: _workoutImage,
                 onGenerate: _generateWorkout,
                 // Jump to the Workouts tab where it can be completed.
                 onStart: () => setState(() => _navIndex = 1),
@@ -876,6 +892,7 @@ class _WorkoutCard extends StatelessWidget {
     required this.day,
     required this.busy,
     required this.completed,
+    required this.imagePath,
     required this.onGenerate,
     required this.onStart,
   });
@@ -884,6 +901,9 @@ class _WorkoutCard extends StatelessWidget {
   final WorkoutDay? day;
   final bool busy;
   final bool completed;
+
+  /// Asset path of the photo shown on the right side of the card.
+  final String imagePath;
   final VoidCallback onGenerate;
   final VoidCallback onStart;
 
@@ -1031,56 +1051,87 @@ class _WorkoutCard extends StatelessWidget {
                 ),
               ),
             ),
-            // Stand-in for the photo in the reference design. Swap this
-            // for Image.asset(...) / Image.network(...) if you add pictures.
+            // Random workout photo from assets. Falls back to the old
+            // dumbbell placeholder if the image can't be loaded.
             Container(
               width: 124,
               margin: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
+              child: ClipRRect(
                 borderRadius: BorderRadius.circular(20),
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF2F6B1F), Color(0xFF101A0E)],
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Image.asset(
+                      imagePath,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, error, __) {
+                        debugPrint('Workout image error: $error');
+                        return const DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [Color(0xFF2F6B1F), Color(0xFF101A0E)],
+                            ),
+                          ),
+                          child: Center(
+                            child: Icon(
+                              Icons.fitness_center_rounded,
+                              size: 52,
+                              color: kBrand,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    // Green fade at the bottom, matching the header glow.
+                    Positioned(
+                      bottom: 0,
+                      left: 0,
+                      right: 0,
+                      height: 120,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.bottomCenter,
+                            end: Alignment.topCenter,
+                            colors: [
+                              const Color(0xFF1E4D1B),
+                              const Color(0xFF1E4D1B).withOpacity(0.0),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      left: 10,
+                      right: 10,
+                      bottom: 10,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(
+                              Icons.local_fire_department_outlined,
+                              size: 12,
+                              color: Colors.white70,
+                            ),
+                            const SizedBox(width: 3),
+                            Text(
+                              '${d.estimatedCalories} kcal',
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-              child: Stack(
-                children: [
-                  const Center(
-                    child: Icon(
-                      Icons.fitness_center_rounded,
-                      size: 52,
-                      color: kBrand,
-                    ),
-                  ),
-                  Positioned(
-                    left: 10,
-                    right: 10,
-                    bottom: 10,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(vertical: 5),
-                      decoration: BoxDecoration(
-                        color: Colors.black38,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(
-                            Icons.local_fire_department_outlined,
-                            size: 12,
-                            color: Colors.white70,
-                          ),
-                          const SizedBox(width: 3),
-                          Text(
-                            '${d.estimatedCalories} kcal',
-                            style: const TextStyle(fontSize: 11),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
               ),
             ),
           ],
