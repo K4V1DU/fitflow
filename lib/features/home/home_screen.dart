@@ -12,7 +12,7 @@ const _kApiBaseUrl = 'https://backend-six-green-45.vercel.app';
 
 /// Fills the dashboard with sample numbers until real tracking
 /// (step counter, sleep, etc.) is connected. Set to false for a clean start.
-const _kUseDemoData = true;
+const _kUseDemoData = false;
 
 const _brand = Color(0xFF6C5CE7);
 const _brandLight = Color(0xFFA29BFE);
