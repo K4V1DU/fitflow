@@ -2,16 +2,32 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../entities/app_user.dart';
+import '../../entities/meal_plan.dart';
+import '../../entities/workout_plan.dart';
+import '../../services/ai_plan_service.dart';
 import '../../services/auth_service.dart';
+
+/// Android emulator -> your PC. On a real phone use your PC's LAN IP,
+/// e.g. 'http://192.168.1.20:3000'.
+const _kApiBaseUrl = 'http://10.0.2.2:3000';
+
+/// Fills the dashboard with sample numbers until real tracking
+/// (step counter, sleep, etc.) is connected. Set to false for a clean start.
+const _kUseDemoData = true;
 
 const _brand = Color(0xFF6C5CE7);
 const _brandLight = Color(0xFFA29BFE);
 const _accent = Color(0xFF00D2A0);
 const _warm = Color(0xFFFF9F43);
 const _pink = Color(0xFFFF6B81);
+const _blue = Color(0xFF4DA8FF);
 
-/// FitFlow home dashboard: calories, AI coach, today's workout,
-/// quick stats, weekly activity and meals.
+String _fmt(int n) =>
+    n.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+
+String _cap(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -21,7 +37,114 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final _auth = AuthService();
+  late final AiPlanService _ai;
+  late AppUser _user;
+
   int _navIndex = 0;
+  bool _busyWorkout = false;
+  bool _busyMeal = false;
+
+  /// Meals from today's plan the user has ticked off as eaten.
+  final Set<String> _eaten = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _ai = AiPlanService(baseUrl: _kApiBaseUrl);
+
+    final u = _auth.currentUser;
+    final base = AppUser.newUser(
+      uid: u?.uid ?? '',
+      email: u?.email ?? '',
+      displayName: u?.displayName,
+    );
+    _user = _kUseDemoData ? _withDemoData(base) : base;
+  }
+
+  @override
+  void dispose() {
+    _ai.dispose();
+    super.dispose();
+  }
+
+  // ── Derived view: stored stats + meals ticked off today ──
+
+  String _mealKey(Meal m) => '${m.type.name}-${m.name}';
+
+  AppUser get _view {
+    var cal = 0, p = 0, c = 0, f = 0;
+    final day = _user.mealPlan?.today;
+    if (day != null) {
+      for (final m in day.meals) {
+        if (_eaten.contains(_mealKey(m))) {
+          cal += m.calories;
+          p += m.proteinG;
+          c += m.carbsG;
+          f += m.fatG;
+        }
+      }
+    }
+    final t = _user.today;
+    return _user.copyWith(
+      today: t.copyWith(
+        caloriesEaten: t.caloriesEaten + cal,
+        proteinG: t.proteinG + p,
+        carbsG: t.carbsG + c,
+        fatG: t.fatG + f,
+      ),
+    );
+  }
+
+  // ── Actions ──
+
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _generateWorkout() async {
+    if (_busyWorkout) return;
+    setState(() => _busyWorkout = true);
+    try {
+      final plan = await _ai.generateWorkoutPlan(_user);
+      if (!mounted) return;
+      setState(() => _user = _user.copyWith(workoutPlan: plan));
+      _toast('Your new workout plan is ready');
+    } on AiPlanException catch (e) {
+      _toast(e.message);
+    } finally {
+      if (mounted) setState(() => _busyWorkout = false);
+    }
+  }
+
+  Future<void> _generateMeals() async {
+    if (_busyMeal) return;
+    setState(() => _busyMeal = true);
+    try {
+      final plan = await _ai.generateMealPlan(_user);
+      if (!mounted) return;
+      setState(() {
+        _user = _user.copyWith(mealPlan: plan);
+        _eaten.clear();
+      });
+      _toast('Your new meal plan is ready');
+    } on AiPlanException catch (e) {
+      _toast(e.message);
+    } finally {
+      if (mounted) setState(() => _busyMeal = false);
+    }
+  }
+
+  void _addWater() => setState(() => _user = _user.addWater(250));
+
+  void _toggleMeal(Meal m) {
+    final key = _mealKey(m);
+    setState(() {
+      if (!_eaten.remove(key)) _eaten.add(key);
+    });
+  }
 
   String get _greeting {
     final h = DateTime.now().hour;
@@ -30,18 +153,30 @@ class _HomeScreenState extends State<HomeScreen> {
     return 'Good evening';
   }
 
-  void _soon(String what) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text('$what coming soon')));
+  /// Simple rule-based tip from today's numbers (no AI call).
+  String _coachTip(AppUser u) {
+    if (u.workoutPlan == null && u.mealPlan == null) {
+      return 'Let AI build your weekly workout and meal plans. '
+          'It only takes a few seconds.';
+    }
+    final proteinLeft = u.proteinGoalG - u.today.proteinG;
+    if (proteinLeft > 20) {
+      return 'You are ${proteinLeft}g short on protein today. '
+          'A high-protein meal would keep you on track.';
+    }
+    if (u.waterProgress < 0.5) {
+      return 'You have had ${u.today.waterLitres.toStringAsFixed(1)} L of water. '
+          'Aim for ${(u.waterGoalMl / 1000).toStringAsFixed(1)} L today.';
+    }
+    return 'Nice work, you are on track today. Keep it up!';
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final user = _auth.currentUser;
-    final name =
-        user?.displayName ?? user?.email?.split('@').first ?? 'Athlete';
+    final u = _view;
+    final workoutDay = u.workoutPlan?.today;
+    final mealDay = u.mealPlan?.today;
 
     return Scaffold(
       backgroundColor: isDark
@@ -51,44 +186,58 @@ class _HomeScreenState extends State<HomeScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
           children: [
-            _Header(greeting: _greeting, name: name, onLogout: _auth.logout),
+            _Header(greeting: _greeting, name: u.name, onLogout: _auth.logout),
             const SizedBox(height: 20),
-            const _CalorieCard(),
+            _CalorieCard(user: u),
             const SizedBox(height: 16),
             _AiCoachCard(
-              onGenerate: () => _soon('AI workout generator'),
-              onScan: () => _soon('AI meal scan'),
+              tip: _coachTip(u),
+              busyWorkout: _busyWorkout,
+              busyMeal: _busyMeal,
+              onGenerateWorkout: _generateWorkout,
+              onGenerateMeals: _generateMeals,
             ),
             const SizedBox(height: 24),
-            const _SectionTitle('Today\'s workout'),
+            _SectionTitle(
+              'Today\'s workout',
+              actionLabel: u.workoutPlan != null ? 'Regenerate' : null,
+              onAction: _busyWorkout ? null : _generateWorkout,
+            ),
             const SizedBox(height: 12),
-            _WorkoutCard(onStart: () => _soon('Workout player')),
+            _WorkoutSection(
+              plan: u.workoutPlan,
+              day: workoutDay,
+              busy: _busyWorkout,
+              onGenerate: _generateWorkout,
+              onStart: () => _toast('Workout player coming soon'),
+            ),
             const SizedBox(height: 24),
-            const Row(
+            Row(
               children: [
                 Expanded(
                   child: _StatTile(
                     icon: Icons.directions_walk_rounded,
                     color: _accent,
-                    value: '6,240',
+                    value: _fmt(u.today.steps),
                     label: 'Steps',
                   ),
                 ),
-                SizedBox(width: 12),
+                const SizedBox(width: 12),
                 Expanded(
                   child: _StatTile(
                     icon: Icons.water_drop_rounded,
-                    color: Color(0xFF4DA8FF),
-                    value: '1.5 L',
+                    color: _blue,
+                    value: '${u.today.waterLitres.toStringAsFixed(2)} L',
                     label: 'Water',
+                    onAdd: _addWater,
                   ),
                 ),
-                SizedBox(width: 12),
+                const SizedBox(width: 12),
                 Expanded(
                   child: _StatTile(
                     icon: Icons.bedtime_rounded,
                     color: _brandLight,
-                    value: '7h 20m',
+                    value: u.today.sleepLabel,
                     label: 'Sleep',
                   ),
                 ),
@@ -97,31 +246,22 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 24),
             const _SectionTitle('Weekly activity'),
             const SizedBox(height: 12),
-            const _WeeklyChart(),
+            _WeeklyChart(days: u.last7Days),
             const SizedBox(height: 24),
             _SectionTitle(
               'Today\'s meals',
-              actionLabel: 'Add',
-              onAction: () => _soon('Add meal'),
+              actionLabel: u.mealPlan != null ? 'Regenerate' : null,
+              onAction: _busyMeal ? null : _generateMeals,
             ),
             const SizedBox(height: 12),
-            const _MealTile(
-              icon: Icons.free_breakfast_rounded,
-              name: 'Oats with banana & peanut butter',
-              time: 'Breakfast · 8:10 AM',
-              kcal: 420,
-            ),
-            const _MealTile(
-              icon: Icons.lunch_dining_rounded,
-              name: 'Grilled chicken rice bowl',
-              time: 'Lunch · 12:45 PM',
-              kcal: 640,
-            ),
-            const _MealTile(
-              icon: Icons.cookie_rounded,
-              name: 'Greek yogurt & almonds',
-              time: 'Snack · 4:00 PM',
-              kcal: 360,
+            _MealSection(
+              plan: u.mealPlan,
+              day: mealDay,
+              busy: _busyMeal,
+              eaten: _eaten,
+              keyOf: _mealKey,
+              onGenerate: _generateMeals,
+              onToggle: _toggleMeal,
             ),
           ],
         ),
@@ -130,8 +270,11 @@ class _HomeScreenState extends State<HomeScreen> {
         selectedIndex: _navIndex,
         onDestinationSelected: (i) {
           setState(() => _navIndex = i);
-          if (i != 0)
-            _soon(['', 'Workouts', 'Feed', 'Nutrition', 'Profile'][i]);
+          if (i != 0) {
+            _toast(
+              '${['', 'Workouts', 'Feed', 'Nutrition', 'Profile'][i]} coming soon',
+            );
+          }
         },
         destinations: const [
           NavigationDestination(
@@ -165,6 +308,35 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
+/// Sample numbers so the dashboard looks alive during development.
+AppUser _withDemoData(AppUser base) {
+  final now = DateTime.now();
+  const minutes = [40, 55, 0, 35, 60, 25];
+  final history = List.generate(6, (i) {
+    final day = DateTime(now.year, now.month, now.day - (6 - i));
+    return DailyStats(
+      date: day,
+      steps: 5000 + i * 900,
+      waterMl: 1800 + i * 100,
+      sleepMinutes: 400 + i * 10,
+      caloriesEaten: 1900 + i * 50,
+      activeMinutes: minutes[i],
+    );
+  });
+  return base.copyWith(
+    today: base.today.copyWith(
+      steps: 6240,
+      waterMl: 1500,
+      sleepMinutes: 440,
+      caloriesEaten: 420,
+      proteinG: 22,
+      carbsG: 60,
+      fatG: 14,
+    ),
+    history: history,
+  );
+}
+
 // ───────────────────────── Shared pieces ─────────────────────────
 
 class _Surface extends StatelessWidget {
@@ -180,6 +352,7 @@ class _Surface extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
+      width: double.infinity,
       padding: padding,
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1C1C26) : Colors.white,
@@ -224,6 +397,104 @@ class _SectionTitle extends StatelessWidget {
   }
 }
 
+class _Spinner extends StatelessWidget {
+  const _Spinner({this.color});
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 18,
+    height: 18,
+    child: CircularProgressIndicator(strokeWidth: 2, color: color),
+  );
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.message,
+    required this.buttonLabel,
+    required this.busy,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String message;
+  final String buttonLabel;
+  final bool busy;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return _Surface(
+      child: Column(
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Icon(icon, color: color),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            title,
+            style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: textTheme.bodySmall,
+          ),
+          const SizedBox(height: 14),
+          FilledButton.icon(
+            onPressed: busy ? null : onPressed,
+            style: FilledButton.styleFrom(backgroundColor: _brand),
+            icon: busy
+                ? const _Spinner(color: Colors.white)
+                : const Icon(Icons.auto_awesome, size: 18),
+            label: Text(busy ? 'Generating...' : buttonLabel),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Chip extends StatelessWidget {
+  const _Chip({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.onSurface.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14),
+          const SizedBox(width: 4),
+          Text(text, style: const TextStyle(fontSize: 12)),
+        ],
+      ),
+    );
+  }
+}
+
 // ───────────────────────── Header ─────────────────────────
 
 class _Header extends StatelessWidget {
@@ -264,15 +535,6 @@ class _Header extends StatelessWidget {
             ],
           ),
         ),
-        _Surface(
-          padding: EdgeInsets.zero,
-          child: IconButton(
-            tooltip: 'Notifications',
-            icon: const Icon(Icons.notifications_none_rounded),
-            onPressed: () {},
-          ),
-        ),
-        const SizedBox(width: 10),
         PopupMenuButton<String>(
           tooltip: 'Account',
           onSelected: (v) {
@@ -310,11 +572,13 @@ class _Header extends StatelessWidget {
 // ───────────────────────── Calories ─────────────────────────
 
 class _CalorieCard extends StatelessWidget {
-  const _CalorieCard();
+  const _CalorieCard({required this.user});
+
+  final AppUser user;
 
   @override
   Widget build(BuildContext context) {
-    const eaten = 1420, goal = 2200;
+    final t = user.today;
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -338,22 +602,25 @@ class _CalorieCard extends StatelessWidget {
             width: 120,
             height: 120,
             child: CustomPaint(
-              painter: _RingPainter(progress: eaten / goal),
-              child: const Center(
+              painter: _RingPainter(progress: user.calorieProgress),
+              child: Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      '1,420',
-                      style: TextStyle(
+                      _fmt(t.caloriesEaten),
+                      style: const TextStyle(
                         color: Colors.white,
                         fontSize: 22,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
                     Text(
-                      'of 2,200 kcal',
-                      style: TextStyle(color: Colors.white70, fontSize: 11),
+                      'of ${_fmt(user.calorieGoal)} kcal',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 11,
+                      ),
                     ),
                   ],
                 ),
@@ -361,14 +628,22 @@ class _CalorieCard extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 20),
-          const Expanded(
+          Expanded(
             child: Column(
               children: [
-                _MacroBar(label: 'Protein', value: 92, goal: 140),
-                SizedBox(height: 12),
-                _MacroBar(label: 'Carbs', value: 160, goal: 250),
-                SizedBox(height: 12),
-                _MacroBar(label: 'Fat', value: 38, goal: 70),
+                _MacroBar(
+                  label: 'Protein',
+                  value: t.proteinG,
+                  goal: user.proteinGoalG,
+                ),
+                const SizedBox(height: 12),
+                _MacroBar(
+                  label: 'Carbs',
+                  value: t.carbsG,
+                  goal: user.carbsGoalG,
+                ),
+                const SizedBox(height: 12),
+                _MacroBar(label: 'Fat', value: t.fatG, goal: user.fatGoalG),
               ],
             ),
           ),
@@ -411,7 +686,7 @@ class _MacroBar extends StatelessWidget {
         ClipRRect(
           borderRadius: BorderRadius.circular(6),
           child: LinearProgressIndicator(
-            value: (value / goal).clamp(0.0, 1.0),
+            value: goal <= 0 ? 0.0 : (value / goal).clamp(0.0, 1.0),
             minHeight: 6,
             backgroundColor: Colors.white24,
             valueColor: const AlwaysStoppedAnimation(Colors.white),
@@ -430,8 +705,7 @@ class _RingPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     const stroke = 11.0;
-    final rect = Offset.zero & size;
-    final arcRect = rect.deflate(stroke / 2);
+    final arcRect = (Offset.zero & size).deflate(stroke / 2);
 
     final track = Paint()
       ..color = Colors.white24
@@ -460,10 +734,19 @@ class _RingPainter extends CustomPainter {
 // ───────────────────────── AI Coach ─────────────────────────
 
 class _AiCoachCard extends StatelessWidget {
-  const _AiCoachCard({required this.onGenerate, required this.onScan});
+  const _AiCoachCard({
+    required this.tip,
+    required this.busyWorkout,
+    required this.busyMeal,
+    required this.onGenerateWorkout,
+    required this.onGenerateMeals,
+  });
 
-  final VoidCallback onGenerate;
-  final VoidCallback onScan;
+  final String tip;
+  final bool busyWorkout;
+  final bool busyMeal;
+  final VoidCallback onGenerateWorkout;
+  final VoidCallback onGenerateMeals;
 
   @override
   Widget build(BuildContext context) {
@@ -495,8 +778,7 @@ class _AiCoachCard extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            'You are 48g short on protein today. A high-protein dinner and a '
-            'light 20-minute core session would keep you on track this week.',
+            tip,
             style: Theme.of(context).textTheme.bodyMedium
                 ?.copyWith(height: 1.4),
           ),
@@ -505,24 +787,28 @@ class _AiCoachCard extends StatelessWidget {
             children: [
               Expanded(
                 child: FilledButton.icon(
-                  onPressed: onGenerate,
+                  onPressed: busyWorkout ? null : onGenerateWorkout,
                   style: FilledButton.styleFrom(
                     backgroundColor: _brand,
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
-                  icon: const Icon(Icons.bolt_rounded, size: 18),
-                  label: const Text('Generate workout'),
+                  icon: busyWorkout
+                      ? const _Spinner(color: Colors.white)
+                      : const Icon(Icons.bolt_rounded, size: 18),
+                  label: const Text('Workout'),
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: onScan,
+                  onPressed: busyMeal ? null : onGenerateMeals,
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
-                  icon: const Icon(Icons.camera_alt_outlined, size: 18),
-                  label: const Text('Scan meal'),
+                  icon: busyMeal
+                      ? const _Spinner()
+                      : const Icon(Icons.restaurant_menu_rounded, size: 18),
+                  label: const Text('Meal plan'),
                 ),
               ),
             ],
@@ -535,13 +821,75 @@ class _AiCoachCard extends StatelessWidget {
 
 // ───────────────────────── Workout ─────────────────────────
 
-class _WorkoutCard extends StatelessWidget {
-  const _WorkoutCard({required this.onStart});
+class _WorkoutSection extends StatelessWidget {
+  const _WorkoutSection({
+    required this.plan,
+    required this.day,
+    required this.busy,
+    required this.onGenerate,
+    required this.onStart,
+  });
 
+  final WorkoutPlan? plan;
+  final WorkoutDay? day;
+  final bool busy;
+  final VoidCallback onGenerate;
   final VoidCallback onStart;
 
   @override
   Widget build(BuildContext context) {
+    if (plan == null) {
+      return _EmptyState(
+        icon: Icons.fitness_center,
+        color: _warm,
+        title: 'No workout plan yet',
+        message: 'Let AI build a weekly plan for your goal and level.',
+        buttonLabel: 'Generate with AI',
+        busy: busy,
+        onPressed: onGenerate,
+      );
+    }
+
+    final d = day;
+    if (d == null || d.isRestDay) {
+      return _Surface(
+        child: Row(
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: _accent.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: const Icon(Icons.self_improvement_rounded, color: _accent),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Rest day',
+                    style: Theme.of(context).textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Recovery is part of the plan. Stretch, walk and hydrate.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final shown = d.exercises.take(4).toList();
+    final more = d.exercises.length - shown.length;
+
     return _Surface(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -563,13 +911,13 @@ class _WorkoutCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Upper Body Strength',
+                      d.title,
                       style: Theme.of(context).textTheme.titleMedium
                           ?.copyWith(fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Personalised by AI · Intermediate',
+                      d.focus.isEmpty ? 'Personalised by AI' : d.focus,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
@@ -578,65 +926,77 @@ class _WorkoutCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 14),
-          const Wrap(
+          Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
-              _Chip(icon: Icons.timer_outlined, text: '45 min'),
-              _Chip(icon: Icons.list_alt_rounded, text: '6 exercises'),
+              _Chip(
+                icon: Icons.timer_outlined,
+                text: '${d.durationMinutes} min',
+              ),
+              _Chip(
+                icon: Icons.list_alt_rounded,
+                text: '${d.exercises.length} exercises',
+              ),
               _Chip(
                 icon: Icons.local_fire_department_outlined,
-                text: '320 kcal',
+                text: '${d.estimatedCalories} kcal',
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(6),
-                  child: const LinearProgressIndicator(
-                    value: 0.0,
-                    minHeight: 6,
-                    valueColor: AlwaysStoppedAnimation(_accent),
+          const SizedBox(height: 14),
+          for (var i = 0; i < shown.length; i++)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 5),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 11,
+                    backgroundColor: _brand.withOpacity(0.12),
+                    child: Text(
+                      '${i + 1}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: _brand,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      shown[i].name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Text(
+                    '${shown[i].sets} × ${shown[i].reps}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
               ),
-              const SizedBox(width: 14),
-              FilledButton(
-                onPressed: onStart,
-                style: FilledButton.styleFrom(backgroundColor: _accent),
-                child: const Text('Start'),
+            ),
+          if (more > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 4, left: 2),
+              child: Text(
+                '+$more more exercises',
+                style: Theme.of(context).textTheme.bodySmall,
               ),
-            ],
+            ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: onStart,
+              style: FilledButton.styleFrom(
+                backgroundColor: _accent,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              child: const Text('Start workout'),
+            ),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Chip extends StatelessWidget {
-  const _Chip({required this.icon, required this.text});
-
-  final IconData icon;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.onSurface.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14),
-          const SizedBox(width: 4),
-          Text(text, style: const TextStyle(fontSize: 12)),
         ],
       ),
     );
@@ -651,6 +1011,7 @@ class _StatTile extends StatelessWidget {
     required this.color,
     required this.value,
     required this.label,
+    this.onAdd,
   });
 
   final IconData icon;
@@ -658,22 +1019,43 @@ class _StatTile extends StatelessWidget {
   final String value;
   final String label;
 
+  /// When set, shows a small "+" button (used for water).
+  final VoidCallback? onAdd;
+
   @override
   Widget build(BuildContext context) {
     return _Surface(
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
-      child: Column(
+      child: Stack(
         children: [
-          Icon(icon, color: color),
-          const SizedBox(height: 8),
-          FittedBox(
-            child: Text(
-              value,
-              style: Theme.of(context).textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w800),
+          SizedBox(
+            width: double.infinity,
+            child: Column(
+              children: [
+                Icon(icon, color: color),
+                const SizedBox(height: 8),
+                FittedBox(
+                  child: Text(
+                    value,
+                    style: Theme.of(context).textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                Text(label, style: Theme.of(context).textTheme.bodySmall),
+              ],
             ),
           ),
-          Text(label, style: Theme.of(context).textTheme.bodySmall),
+          if (onAdd != null)
+            Positioned(
+              top: -6,
+              right: -8,
+              child: IconButton(
+                tooltip: 'Add 250 ml',
+                visualDensity: VisualDensity.compact,
+                icon: Icon(Icons.add_circle_rounded, color: color, size: 22),
+                onPressed: onAdd,
+              ),
+            ),
         ],
       ),
     );
@@ -683,21 +1065,24 @@ class _StatTile extends StatelessWidget {
 // ───────────────────────── Weekly chart ─────────────────────────
 
 class _WeeklyChart extends StatelessWidget {
-  const _WeeklyChart();
+  const _WeeklyChart({required this.days});
+
+  final List<DailyStats> days;
 
   @override
   Widget build(BuildContext context) {
-    const days = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-    const minutes = [40, 55, 0, 35, 60, 25, 45];
-    const today = 6;
-    const maxMin = 60.0;
+    const letters = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    final maxMin = math.max(
+      60,
+      days.fold<int>(0, (m, d) => math.max(m, d.activeMinutes)),
+    );
+    final todayIndex = days.length - 1;
 
     return _Surface(
       child: SizedBox(
         height: 140,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             for (var i = 0; i < days.length; i++)
               Expanded(
@@ -706,16 +1091,16 @@ class _WeeklyChart extends StatelessWidget {
                   children: [
                     Container(
                       width: 16,
-                      height: 8 + (minutes[i] / maxMin) * 90,
+                      height: 8 + (days[i].activeMinutes / maxMin) * 90,
                       decoration: BoxDecoration(
-                        gradient: i == today
+                        gradient: i == todayIndex
                             ? const LinearGradient(
                                 colors: [_brand, _brandLight],
                                 begin: Alignment.bottomCenter,
                                 end: Alignment.topCenter,
                               )
                             : null,
-                        color: i == today
+                        color: i == todayIndex
                             ? null
                             : Theme.of(context).colorScheme.onSurface
                                   .withOpacity(0.1),
@@ -724,10 +1109,10 @@ class _WeeklyChart extends StatelessWidget {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      days[i],
+                      letters[days[i].date.weekday - 1],
                       style: TextStyle(
                         fontSize: 12,
-                        fontWeight: i == today
+                        fontWeight: i == todayIndex
                             ? FontWeight.w800
                             : FontWeight.w400,
                       ),
@@ -744,59 +1129,141 @@ class _WeeklyChart extends StatelessWidget {
 
 // ───────────────────────── Meals ─────────────────────────
 
-class _MealTile extends StatelessWidget {
-  const _MealTile({
-    required this.icon,
-    required this.name,
-    required this.time,
-    required this.kcal,
+class _MealSection extends StatelessWidget {
+  const _MealSection({
+    required this.plan,
+    required this.day,
+    required this.busy,
+    required this.eaten,
+    required this.keyOf,
+    required this.onGenerate,
+    required this.onToggle,
   });
 
-  final IconData icon;
-  final String name;
-  final String time;
-  final int kcal;
+  final MealPlan? plan;
+  final MealDay? day;
+  final bool busy;
+  final Set<String> eaten;
+  final String Function(Meal) keyOf;
+  final VoidCallback onGenerate;
+  final void Function(Meal) onToggle;
+
+  static IconData _iconFor(MealType t) {
+    switch (t) {
+      case MealType.breakfast:
+        return Icons.free_breakfast_rounded;
+      case MealType.lunch:
+        return Icons.lunch_dining_rounded;
+      case MealType.dinner:
+        return Icons.dinner_dining_rounded;
+      case MealType.snack:
+        return Icons.cookie_rounded;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: _Surface(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: _accent.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Icon(icon, color: _accent, size: 22),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(time, style: Theme.of(context).textTheme.bodySmall),
-                ],
-              ),
-            ),
-            Text(
-              '$kcal kcal',
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ],
+    if (plan == null) {
+      return _EmptyState(
+        icon: Icons.restaurant_menu_rounded,
+        color: _accent,
+        title: 'No meal plan yet',
+        message:
+            'Let AI plan your meals around your calories, macros and diet.',
+        buttonLabel: 'Generate with AI',
+        busy: busy,
+        onPressed: onGenerate,
+      );
+    }
+
+    final d = day;
+    if (d == null || d.meals.isEmpty) {
+      return _Surface(
+        child: Text(
+          'No meals planned for today.',
+          style: Theme.of(context).textTheme.bodyMedium,
         ),
-      ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10, left: 2),
+          child: Text(
+            '${_fmt(d.totalCalories)} kcal planned · '
+            'P ${d.totalProteinG}g · C ${d.totalCarbsG}g · F ${d.totalFatG}g',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+        for (final m in d.meals)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(20),
+              onTap: () => onToggle(m),
+              child: _Surface(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: _accent.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Icon(_iconFor(m.type), color: _accent, size: 22),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            m.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${_cap(m.type.name)} · P ${m.proteinG}g · '
+                            'C ${m.carbsG}g · F ${m.fatG}g',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          '${m.calories} kcal',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 4),
+                        Icon(
+                          eaten.contains(keyOf(m))
+                              ? Icons.check_circle_rounded
+                              : Icons.radio_button_unchecked,
+                          size: 20,
+                          color: eaten.contains(keyOf(m))
+                              ? _accent
+                              : Colors.grey,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

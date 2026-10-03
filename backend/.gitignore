@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Secrets (never commit your API key)
+.env
+.env.*
+!.env.example
+
+# Vercel local project link
+.vercel
+
+# Logs and OS files
+npm-debug.log*
+.DS_Store
