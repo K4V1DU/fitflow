@@ -63,7 +63,7 @@ class UserRepository {
       }
     } else {
       // New user: create the profile in the background.
-      ref.set(_profileMap(base)).catchError((_) {});
+      ref.set(_profileMap(base), SetOptions(merge: true)).catchError((_) {});
     }
 
     // Day documents are named yyyy-MM-dd, so comparing ids compares dates.
@@ -125,8 +125,18 @@ class UserRepository {
     // Don't overwrite a stored plan with null.
     if (u.workoutPlan == null) m.remove('workoutPlan');
     if (u.mealPlan == null) m.remove('mealPlan');
+    // Never write nulls: a merge would wipe fields such as photoUrl.
+    m.removeWhere((_, v) => v == null);
     return m;
   }
+
+  Future<void> savePhotoUrl(String uid, String url) =>
+      _userDoc(uid).set({'photoUrl': url}, SetOptions(merge: true));
+
+  /// Emits the profile photo URL whenever it changes (e.g. just after
+  /// registration, or when it is changed on another device).
+  Stream<String?> watchPhotoUrl(String uid) =>
+      _userDoc(uid).snapshots().map((s) => s.data()?['photoUrl'] as String?);
 
   Future<void> saveProfile(AppUser u) =>
       _userDoc(u.uid).set(_profileMap(u), SetOptions(merge: true));

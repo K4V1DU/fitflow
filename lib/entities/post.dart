@@ -8,6 +8,7 @@ class Post {
     required this.authorName,
     required this.text,
     required this.createdAt,
+    this.authorPhotoUrl,
     this.imageUrl,
     this.likedBy = const [],
   });
@@ -18,6 +19,7 @@ class Post {
   final String text;
   final DateTime createdAt;
   final String? imageUrl;
+  final String? authorPhotoUrl;
 
   /// Uids of the users who liked the post.
   final List<String> likedBy;
@@ -27,6 +29,7 @@ class Post {
 
   factory Post.fromMap(String id, Map<String, dynamic> m) {
     final img = m['imageUrl'];
+    final photo = m['authorPhotoUrl'];
     return Post(
       id: id,
       uid: '${m['uid'] ?? ''}',
@@ -35,6 +38,7 @@ class Post {
       // null while a server timestamp is still pending -> "now".
       createdAt: toDate(m['createdAt']),
       imageUrl: img is String && img.isNotEmpty ? img : null,
+      authorPhotoUrl: photo is String && photo.isNotEmpty ? photo : null,
       likedBy: stringList(m['likedBy']),
     );
   }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 // ───────────────────────── Colors ─────────────────────────
 
@@ -267,14 +268,17 @@ class DaySelector extends StatelessWidget {
 // ───────────────────────── Avatar & time helpers ─────────────────────────
 
 class Avatar extends StatelessWidget {
-  const Avatar(this.name, {super.key, this.radius = 20});
+  const Avatar(this.name, {super.key, this.radius = 20, this.imageUrl});
 
   final String name;
   final double radius;
 
+  /// Profile photo. Falls back to the first letter of [name].
+  final String? imageUrl;
+
   @override
   Widget build(BuildContext context) {
-    return CircleAvatar(
+    final initial = CircleAvatar(
       radius: radius,
       backgroundColor: kBrand,
       child: Text(
@@ -283,6 +287,23 @@ class Avatar extends StatelessWidget {
           color: Colors.black,
           fontWeight: FontWeight.w700,
           fontSize: radius * 0.8,
+        ),
+      ),
+    );
+
+    final url = imageUrl;
+    if (url == null || url.isEmpty) return initial;
+
+    return SizedBox(
+      width: radius * 2,
+      height: radius * 2,
+      child: ClipOval(
+        child: Image.network(
+          url,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => initial,
+          loadingBuilder: (context, child, progress) =>
+              progress == null ? child : initial,
         ),
       ),
     );
@@ -297,4 +318,157 @@ String timeAgo(DateTime t) {
   if (d.inHours < 24) return '${d.inHours}h';
   if (d.inDays < 7) return '${d.inDays}d';
   return '${t.day}/${t.month}/${t.year}';
+}
+
+// ───────────────────────── App theme ─────────────────────────
+
+/// Dark + lime theme used by the home screen and the login/register pages.
+ThemeData appTheme() {
+  final base = ThemeData(brightness: Brightness.dark, useMaterial3: true);
+  return base.copyWith(
+    scaffoldBackgroundColor: kBg,
+    colorScheme: base.colorScheme.copyWith(
+      primary: kBrand,
+      onPrimary: Colors.black,
+      secondary: kBrand,
+      onSecondary: Colors.black,
+      surface: kCard,
+      onSurface: Colors.white,
+      surfaceContainer: kCard,
+      surfaceContainerHigh: kCard,
+      surfaceContainerHighest: const Color(0xFF262A26),
+    ),
+    bottomSheetTheme: const BottomSheetThemeData(backgroundColor: kCard),
+  );
+}
+
+// ───────────────────────── Auth pages ─────────────────────────
+
+/// Dark page with the green glow, centred scrollable content and an optional
+/// back button. Wraps its content in [appTheme].
+class AuthScaffold extends StatelessWidget {
+  const AuthScaffold({super.key, required this.child, this.showBack = false});
+
+  final Widget child;
+  final bool showBack;
+
+  @override
+  Widget build(BuildContext context) {
+    return Theme(
+      data: appTheme(),
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: SystemUiOverlayStyle.light.copyWith(
+          statusBarColor: Colors.transparent,
+          systemNavigationBarColor: kBg,
+        ),
+        child: Scaffold(
+          body: Stack(
+            children: [
+              const Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: 360,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Color(0xFF1E4D1B), kBg],
+                    ),
+                  ),
+                ),
+              ),
+              SafeArea(
+                child: Center(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(24),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 400),
+                      child: child,
+                    ),
+                  ),
+                ),
+              ),
+              if (showBack)
+                SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: IconButton(
+                      icon: const Icon(Icons.arrow_back_rounded),
+                      onPressed: () => Navigator.of(context).maybePop(),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+InputDecoration authInputDecoration(
+  String label,
+  IconData icon, {
+  Widget? suffix,
+}) {
+  OutlineInputBorder border(Color c, [double w = 1]) => OutlineInputBorder(
+    borderRadius: BorderRadius.circular(16),
+    borderSide: BorderSide(color: c, width: w),
+  );
+  return InputDecoration(
+    labelText: label,
+    prefixIcon: Icon(icon, color: Colors.white54),
+    suffixIcon: suffix,
+    filled: true,
+    fillColor: kCard,
+    contentPadding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
+    border: border(Colors.transparent),
+    enabledBorder: border(Colors.white10),
+    focusedBorder: border(kBrand, 1.5),
+    errorBorder: border(kPink),
+    focusedErrorBorder: border(kPink, 1.5),
+  );
+}
+
+class AuthButton extends StatelessWidget {
+  const AuthButton({
+    super.key,
+    required this.label,
+    required this.loading,
+    required this.onPressed,
+  });
+
+  final String label;
+  final bool loading;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return FilledButton(
+      onPressed: loading ? null : onPressed,
+      style: FilledButton.styleFrom(
+        backgroundColor: kBrand,
+        foregroundColor: Colors.black,
+        disabledBackgroundColor: kBrand.withOpacity(0.5),
+        disabledForegroundColor: Colors.black54,
+        minimumSize: const Size.fromHeight(54),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      ),
+      child: loading
+          ? const SizedBox(
+              height: 20,
+              width: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.black,
+              ),
+            )
+          : Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+            ),
+    );
+  }
 }

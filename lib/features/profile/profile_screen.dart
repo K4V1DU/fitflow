@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../entities/app_user.dart';
+import '../../services/cloudinary_service.dart';
 import '../../widgets/common.dart';
 
 const _goalLabels = {
@@ -75,9 +77,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   late final _carbs = TextEditingController(text: '${widget.user.carbsGoalG}');
   late final _fat = TextEditingController(text: '${widget.user.fatGoalG}');
   late final _steps = TextEditingController(text: '${widget.user.stepGoal}');
-  late final _water = TextEditingController(
-    text: '${widget.user.waterGoalMl}',
-  );
+  late final _water = TextEditingController(text: '${widget.user.waterGoalMl}');
   late final _sleep = TextEditingController(
     text: _num(widget.user.sleepGoalMinutes / 60),
   );
@@ -85,6 +85,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   late FitnessGoal _goal = widget.user.goal;
   late ExperienceLevel _experience = widget.user.experience;
   late DietType _diet = widget.user.diet;
+
+  bool _uploadingPhoto = false;
 
   @override
   void dispose() {
@@ -115,6 +117,61 @@ class _ProfileScreenState extends State<ProfileScreen> {
   double? _d(TextEditingController c) {
     final v = double.tryParse(c.text.trim().replaceAll(',', '.'));
     return (v != null && v > 0) ? v : null;
+  }
+
+  Future<void> _changePhoto() async {
+    if (_uploadingPhoto) return;
+
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_rounded),
+              title: const Text('Choose from gallery'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_rounded),
+              title: const Text('Take a photo'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return;
+
+    try {
+      final file = await ImagePicker().pickImage(
+        source: source,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 85,
+      );
+      if (file == null) return;
+
+      if (mounted) setState(() => _uploadingPhoto = true);
+      final bytes = await file.readAsBytes();
+      final url = await CloudinaryService.uploadImage(
+        bytes,
+        filename: 'profile.jpg',
+      );
+      if (!mounted) return;
+      widget.onSave(widget.user.copyWith(photoUrl: url));
+    } catch (e) {
+      debugPrint('Photo upload failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text('Could not upload photo: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _uploadingPhoto = false);
+    }
   }
 
   void _save() {
@@ -162,8 +219,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       keyboardType: number
           ? TextInputType.numberWithOptions(decimal: decimal)
           : TextInputType.text,
-      textCapitalization:
-          number ? TextCapitalization.none : TextCapitalization.sentences,
+      textCapitalization: number
+          ? TextCapitalization.none
+          : TextCapitalization.sentences,
       decoration: InputDecoration(
         labelText: label,
         suffixText: suffix,
@@ -204,7 +262,51 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Surface(
             child: Column(
               children: [
-                Avatar(u.name, radius: 36),
+                GestureDetector(
+                  onTap: _changePhoto,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Avatar(u.name, radius: 44, imageUrl: u.photoUrl),
+                      if (_uploadingPhoto)
+                        const Positioned.fill(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.black54,
+                            ),
+                            child: Center(
+                              child: SizedBox(
+                                width: 26,
+                                height: 26,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.5,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: kBrand,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: kCard, width: 2),
+                          ),
+                          child: const Icon(
+                            Icons.photo_camera_rounded,
+                            size: 16,
+                            color: Colors.black,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 12),
                 Text(
                   u.name,
@@ -219,11 +321,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   children: [
                     _Stat(
                       label: 'Weight',
-                      value: u.weightKg == null ? '--' : '${_num(u.weightKg!)} kg',
+                      value: u.weightKg == null
+                          ? '--'
+                          : '${_num(u.weightKg!)} kg',
                     ),
                     _Stat(
                       label: 'Height',
-                      value: u.heightCm == null ? '--' : '${_num(u.heightCm!)} cm',
+                      value: u.heightCm == null
+                          ? '--'
+                          : '${_num(u.heightCm!)} cm',
                     ),
                     _Stat(
                       label: 'BMI',
@@ -266,11 +372,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 const SizedBox(height: 12),
                 _row(
                   _field(_age, 'Age', number: true),
-                  _field(_height, 'Height', suffix: 'cm', number: true, decimal: true),
+                  _field(
+                    _height,
+                    'Height',
+                    suffix: 'cm',
+                    number: true,
+                    decimal: true,
+                  ),
                 ),
                 const SizedBox(height: 12),
                 _row(
-                  _field(_weight, 'Weight', suffix: 'kg', number: true, decimal: true),
+                  _field(
+                    _weight,
+                    'Weight',
+                    suffix: 'kg',
+                    number: true,
+                    decimal: true,
+                  ),
                   const SizedBox.shrink(),
                 ),
               ],
@@ -336,7 +454,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 const SizedBox(height: 12),
                 _row(
                   _field(_water, 'Water', suffix: 'ml', number: true),
-                  _field(_sleep, 'Sleep', suffix: 'h', number: true, decimal: true),
+                  _field(
+                    _sleep,
+                    'Sleep',
+                    suffix: 'h',
+                    number: true,
+                    decimal: true,
+                  ),
                 ),
               ],
             ),
@@ -429,9 +553,8 @@ class _ChoiceRow<T> extends StatelessWidget {
       children: [
         Text(
           label,
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 8),
         Wrap(

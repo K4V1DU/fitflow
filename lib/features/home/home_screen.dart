@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:firebase_auth/firebase_auth.dart';
@@ -38,6 +39,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   bool _loading = true;
   bool _loadFailed = false;
+  StreamSubscription<String?>? _photoSub;
   String? _loadError;
   int _navIndex = 0;
   bool _busyWorkout = false;
@@ -65,6 +67,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _photoSub?.cancel();
     _ai.dispose();
     super.dispose();
   }
@@ -97,6 +100,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       uid: fbUser.uid,
       email: fbUser.email ?? '',
       displayName: fbUser.displayName,
+      photoUrl: fbUser.photoURL,
     );
     await _load();
   }
@@ -113,6 +117,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _loading = false;
         _loadFailed = false;
       });
+      _listenPhoto();
     } catch (e) {
       debugPrint('Load failed: $e');
       if (!mounted) return;
@@ -122,6 +127,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _loadError = '$e';
       });
     }
+  }
+
+  /// Picks up a profile photo that arrives after the first load (for example
+  /// one uploaded during registration).
+  void _listenPhoto() {
+    _photoSub?.cancel();
+    _photoSub = _repo.watchPhotoUrl(_user.uid).listen((url) {
+      if (!mounted || url == null || url == _user.photoUrl) return;
+      setState(() => _user = _user.copyWith(photoUrl: url));
+    }, onError: (Object _) {});
   }
 
   /// Fire-and-forget save. Firestore queues writes while offline, so never
@@ -366,7 +381,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         systemNavigationBarColor: kBg,
       ),
       child: Theme(
-        data: _appTheme(),
+        data: appTheme(),
         child: Scaffold(
           body: IndexedStack(
             index: _navIndex,
@@ -379,7 +394,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 onGenerate: _generateWorkout,
                 onComplete: _completeWorkout,
               ),
-              FeedScreen(uid: _user.uid, authorName: _user.name),
+              FeedScreen(
+                uid: _user.uid,
+                authorName: _user.name,
+                authorPhotoUrl: _user.photoUrl,
+              ),
               NutritionScreen(
                 user: u,
                 busy: _busyMeal,
@@ -449,6 +468,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               _Header(
                 greeting: _greeting,
                 name: u.name,
+                photoUrl: u.photoUrl,
                 weeklyMinutes: u.weeklyActiveMinutes,
                 onAvatarTap: () => setState(() => _navIndex = 4),
               ),
@@ -566,26 +586,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 }
 
-/// Dark + lime theme applied to every tab inside the home screen.
-ThemeData _appTheme() {
-  final base = ThemeData(brightness: Brightness.dark, useMaterial3: true);
-  return base.copyWith(
-    scaffoldBackgroundColor: kBg,
-    colorScheme: base.colorScheme.copyWith(
-      primary: kBrand,
-      onPrimary: Colors.black,
-      secondary: kBrand,
-      onSecondary: Colors.black,
-      surface: kCard,
-      onSurface: Colors.white,
-      surfaceContainer: kCard,
-      surfaceContainerHigh: kCard,
-      surfaceContainerHighest: const Color(0xFF262A26),
-    ),
-    bottomSheetTheme: const BottomSheetThemeData(backgroundColor: kCard),
-  );
-}
-
 /// Sample numbers so the dashboard looks alive during development.
 AppUser _withDemoData(AppUser base) {
   final now = DateTime.now();
@@ -621,12 +621,14 @@ class _Header extends StatelessWidget {
   const _Header({
     required this.greeting,
     required this.name,
+    required this.photoUrl,
     required this.weeklyMinutes,
     required this.onAvatarTap,
   });
 
   final String greeting;
   final String name;
+  final String? photoUrl;
   final int weeklyMinutes;
   final VoidCallback onAvatarTap;
 
@@ -643,7 +645,7 @@ class _Header extends StatelessWidget {
               shape: BoxShape.circle,
               border: Border.all(color: kBrand, width: 2),
             ),
-            child: Avatar(name, radius: 20),
+            child: Avatar(name, radius: 20, imageUrl: photoUrl),
           ),
         ),
         const SizedBox(width: 12),

@@ -10,10 +10,16 @@ import '../../widgets/common.dart';
 /// Social feed: everyone's posts, newest first. Users can post text with an
 /// optional photo, like posts and delete their own.
 class FeedScreen extends StatefulWidget {
-  const FeedScreen({super.key, required this.uid, required this.authorName});
+  const FeedScreen({
+    super.key,
+    required this.uid,
+    required this.authorName,
+    this.authorPhotoUrl,
+  });
 
   final String uid;
   final String authorName;
+  final String? authorPhotoUrl;
 
   @override
   State<FeedScreen> createState() => _FeedScreenState();
@@ -40,6 +46,7 @@ class _FeedScreenState extends State<FeedScreen> {
         repo: _repo,
         uid: widget.uid,
         authorName: widget.authorName,
+        authorPhotoUrl: widget.authorPhotoUrl,
       ),
     );
     if (posted == true) _toast('Posted!');
@@ -109,7 +116,11 @@ class _FeedScreenState extends State<FeedScreen> {
                 ),
               ),
               const SizedBox(height: 20),
-              _ComposerCard(name: widget.authorName, onTap: _compose),
+              _ComposerCard(
+                name: widget.authorName,
+                photoUrl: widget.authorPhotoUrl,
+                onTap: _compose,
+              ),
               const SizedBox(height: 16),
               if (snap.hasError)
                 Surface(
@@ -171,6 +182,7 @@ class _FeedScreenState extends State<FeedScreen> {
                     child: _PostCard(
                       post: p,
                       isMine: p.uid == widget.uid,
+                      myPhotoUrl: widget.authorPhotoUrl,
                       liked: p.isLikedBy(widget.uid),
                       onLike: () => _like(p),
                       onDelete: () => _delete(p),
@@ -187,9 +199,14 @@ class _FeedScreenState extends State<FeedScreen> {
 // ───────────────────────── Composer card ─────────────────────────
 
 class _ComposerCard extends StatelessWidget {
-  const _ComposerCard({required this.name, required this.onTap});
+  const _ComposerCard({
+    required this.name,
+    required this.photoUrl,
+    required this.onTap,
+  });
 
   final String name;
+  final String? photoUrl;
   final VoidCallback onTap;
 
   @override
@@ -199,7 +216,7 @@ class _ComposerCard extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       child: Row(
         children: [
-          Avatar(name),
+          Avatar(name, imageUrl: photoUrl),
           const SizedBox(width: 12),
           Expanded(
             child: GestureDetector(
@@ -238,6 +255,7 @@ class _PostCard extends StatelessWidget {
   const _PostCard({
     required this.post,
     required this.isMine,
+    required this.myPhotoUrl,
     required this.liked,
     required this.onLike,
     required this.onDelete,
@@ -245,6 +263,7 @@ class _PostCard extends StatelessWidget {
 
   final Post post;
   final bool isMine;
+  final String? myPhotoUrl;
   final bool liked;
   final VoidCallback onLike;
   final VoidCallback onDelete;
@@ -260,7 +279,10 @@ class _PostCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Avatar(post.authorName),
+              Avatar(
+                post.authorName,
+                imageUrl: isMine ? myPhotoUrl : post.authorPhotoUrl,
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -371,11 +393,13 @@ class _ComposeSheet extends StatefulWidget {
     required this.repo,
     required this.uid,
     required this.authorName,
+    required this.authorPhotoUrl,
   });
 
   final FeedRepository repo;
   final String uid;
   final String authorName;
+  final String? authorPhotoUrl;
 
   @override
   State<_ComposeSheet> createState() => _ComposeSheetState();
@@ -427,6 +451,7 @@ class _ComposeSheetState extends State<_ComposeSheet> {
           .createPost(
             uid: widget.uid,
             authorName: widget.authorName,
+            authorPhotoUrl: widget.authorPhotoUrl,
             text: _text.text.trim(),
             imageBytes: _image,
           )
@@ -456,7 +481,7 @@ class _ComposeSheetState extends State<_ComposeSheet> {
           children: [
             Row(
               children: [
-                Avatar(widget.authorName),
+                Avatar(widget.authorName, imageUrl: widget.authorPhotoUrl),
                 const SizedBox(width: 12),
                 Text(
                   widget.authorName,
