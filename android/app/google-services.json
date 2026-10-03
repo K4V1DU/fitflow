@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "582241506381",
+    "project_id": "fitflow-kavidu",
+    "storage_bucket": "fitflow-kavidu.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:582241506381:android:2969233d441f025a5a7804",
+        "android_client_info": {
+          "package_name": "com.kavidu.fitflow"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBDknVKifjch4ze8uhFYibODlwAujnqsxA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
